@@ -1,0 +1,8 @@
+.cache/
+vendor/
+[._]*.sw[a-p]
+driver_image.tar
+*.tgz
+
+**/.DS_Store
+.omx/
