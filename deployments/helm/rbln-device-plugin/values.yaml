@@ -26,7 +26,7 @@ devicePlugin:
   affinity: {}
   kubeletDevicePluginPath: /var/lib/kubelet/device-plugins
   cdiRoot: /var/run/cdi
-  useGenericResourceName: false
+  useGenericResourceName: true
   containers:
     plugin:
       securityContext:
