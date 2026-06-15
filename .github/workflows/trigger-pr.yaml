@@ -1,0 +1,70 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  pr-title-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        uses: amannn/action-semantic-pull-request@v5
+        with:
+          types: |
+            build
+            chore
+            ci
+            docs
+            feat
+            fix
+            perf
+            refactor
+            revert
+            style
+            test
+          scopes: |
+            .*
+          requireScope: false
+          subjectPattern: ^.{1,100}$
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint:
+    needs: pr-title-validation
+    uses: ./.github/workflows/lint.yaml
+    secrets: inherit
+  manifests-check:
+    needs: pr-title-validation
+    uses: ./.github/workflows/manifests.check.yaml
+    secrets: inherit
+  unit-tests:
+    needs: pr-title-validation
+    uses: ./.github/workflows/go-tests.yaml
+  image-build-push:
+    needs: [lint, manifests-check, unit-tests]
+    uses: ./.github/workflows/image-build-push.yaml
+    with:
+      registry: harbor.k8s.rebellions.in
+      image_repository: ${{ vars.IMAGE_REPOSITORY }}
+      image_tag: ${{ github.sha }}
+    secrets:
+      registry_id: ${{ secrets.HARBOR_USERNAME }}
+      registry_password: ${{ secrets.HARBOR_PASSWORD }}
+  e2e:
+    needs: image-build-push
+    uses: ./.github/workflows/e2e.yaml
+    secrets: inherit
+    with:
+      image_repository: ${{ vars.IMAGE_REPOSITORY }}
+      image_tag: ${{ github.sha }}
