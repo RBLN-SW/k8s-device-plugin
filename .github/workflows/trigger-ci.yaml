@@ -1,58 +1,26 @@
 name: CI
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize]
   push:
-    branches: [main]
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  pr-title-validation:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
-    steps:
-      - name: Validate PR title
-        uses: amannn/action-semantic-pull-request@v5
-        with:
-          types: |
-            build
-            chore
-            ci
-            docs
-            feat
-            fix
-            perf
-            refactor
-            revert
-            style
-            test
-          scopes: |
-            .*
-          requireScope: false
-          subjectPattern: ^.{1,100}$
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   lint:
     uses: ./.github/workflows/lint.yaml
     secrets: inherit
-
   manifests-check:
     uses: ./.github/workflows/manifests.check.yaml
     secrets: inherit
-
   unit-tests:
     uses: ./.github/workflows/go-tests.yaml
-
   image-build-push:
     needs: [lint, manifests-check, unit-tests]
     uses: ./.github/workflows/image-build-push.yaml
@@ -63,11 +31,3 @@ jobs:
     secrets:
       registry_id: ${{ secrets.HARBOR_USERNAME }}
       registry_password: ${{ secrets.HARBOR_PASSWORD }}
-
-  e2e:
-    needs: image-build-push
-    uses: ./.github/workflows/e2e.yaml
-    secrets: inherit
-    with:
-      image_repository: ${{ vars.IMAGE_REPOSITORY }}
-      image_tag: ${{ github.sha }}

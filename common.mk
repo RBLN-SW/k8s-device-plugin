@@ -20,6 +20,6 @@ VERSION  ?=
 vVERSION := v$(VERSION:v%=%)
 
 ifeq ($(IMAGE_NAME),)
-REGISTRY ?= harbor.k8s.rebellions.in/rebellions-sw
+REGISTRY ?= harbor.k8s.rebellions.in/rebellions
 IMAGE_NAME = $(REGISTRY)/k8s-device-plugin
 endif
