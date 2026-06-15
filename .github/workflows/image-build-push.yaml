@@ -15,12 +15,26 @@ on:
         type: string
         description: The tag of the image to push
         required: true
+      runner:
+        type: string
+        description: Runner label for the build job
+        required: false
+        default: sw-cloud-cluster-ci
+    secrets:
+      registry_id:
+        description: Registry login ID
+        required: true
+      registry_password:
+        description: Registry login password
+        required: true
 
 jobs:
   image-build-push:
-    runs-on: sw-cloud-cluster-ci
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
       - name: Login to registry
         shell: bash
         run: |
@@ -35,3 +49,12 @@ jobs:
             IMAGE_NAME="${{ inputs.image_repository }}" \
             IMAGE_TAG="${{ inputs.image_tag }}" \
             VERSION="${{ inputs.image_tag }}"
+
+      - name: Tag dev (alias of the immutable commit SHA, main push only)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${{ inputs.image_repository }}:dev" \
+            "${{ inputs.image_repository }}:${{ inputs.image_tag }}"
