@@ -117,8 +117,6 @@ steps:
       REBEL_SW_DEV_PASSWORD: REBEL_SW_DEV_PASSWORD
       KUBECONFIG_B64: KUBECONFIG_B64
       GIT_PAT: GIT_PAT
-      PYPI_USERNAME: PYPI_USERNAME
-      PYPI_PASSWORD: PYPI_PASSWORD
       HF_TOKEN: HF_TOKEN
     artifact_paths:
       - "${SENTINEL_DIR}/reports/**/*"
@@ -175,9 +173,11 @@ steps:
       export SENTINEL_REGISTRY_USER="$$REBEL_SW_DEV_USERNAME"
       export SENTINEL_REGISTRY_PASSWORD="$$REBEL_SW_DEV_PASSWORD"
 
-      # model-zoo inference test creds (test_zz_modelzoo_inference).
-      export SENTINEL_PYPI_USERNAME="$$PYPI_USERNAME"
-      export SENTINEL_PYPI_PASSWORD="$$PYPI_PASSWORD"
+      # model-zoo inference test creds (test_zz_modelzoo_inference): PyPI creds
+      # reuse the same REBEL_SW_DEV_* pair (no dedicated secret in the store);
+      # the HuggingFace token is its own secret.
+      export SENTINEL_PYPI_USERNAME="$$REBEL_SW_DEV_USERNAME"
+      export SENTINEL_PYPI_PASSWORD="$$REBEL_SW_DEV_PASSWORD"
       export SENTINEL_HF_TOKEN="$$HF_TOKEN"
 
       # Capture the result so we still tear down (nuke) before releasing the lock.
