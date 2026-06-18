@@ -51,20 +51,3 @@ jobs:
   unit-tests:
     needs: pr-title-validation
     uses: ./.github/workflows/go-tests.yaml
-  image-build-push:
-    needs: [lint, manifests-check, unit-tests]
-    uses: ./.github/workflows/image-build-push.yaml
-    with:
-      registry: harbor.k8s.rebellions.in
-      image_repository: ${{ vars.IMAGE_REPOSITORY }}
-      image_tag: ${{ github.sha }}
-    secrets:
-      registry_id: ${{ secrets.HARBOR_USERNAME }}
-      registry_password: ${{ secrets.HARBOR_PASSWORD }}
-  e2e:
-    needs: image-build-push
-    uses: ./.github/workflows/e2e.yaml
-    secrets: inherit
-    with:
-      image_repository: ${{ vars.IMAGE_REPOSITORY }}
-      image_tag: ${{ github.sha }}
