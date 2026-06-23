@@ -16,6 +16,7 @@
 MKDIR ?= mkdir
 DISTRIBUTIONS := ubuntu22.04
 DOCKERFILE := $(CURDIR)/deployments/container/Dockerfile
+PLATFORM ?= linux/amd64
 
 include $(CURDIR)/common.mk
 
@@ -33,6 +34,7 @@ ubuntu22.04: BASE_IMAGE = docker.io/ubuntu:22.04
 $(DISTRIBUTIONS):
 	DOCKER_BUILDKIT=1 \
 		docker build --pull \
+		--platform=$(PLATFORM) \
 		--tag $(IMAGE) \
 		--build-arg GOLANG_VERSION="$(GOLANG_VERSION)" \
 		--build-arg BASE_IMAGE="$(BASE_IMAGE)" \
