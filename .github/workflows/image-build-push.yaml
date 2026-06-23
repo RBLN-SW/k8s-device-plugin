@@ -20,6 +20,11 @@ on:
         description: Runner label for the build job
         required: false
         default: sw-cloud-cluster-ci
+      platform:
+        type: string
+        description: Target build platform
+        required: false
+        default: linux/amd64
     secrets:
       registry_id:
         description: Registry login ID
@@ -58,7 +63,8 @@ jobs:
           make -f deployments/container/Makefile build push \
             IMAGE_NAME="${{ inputs.image_repository }}" \
             IMAGE_TAG="${{ inputs.image_tag }}" \
-            VERSION="${{ inputs.image_tag }}"
+            VERSION="${{ inputs.image_tag }}" \
+            PLATFORM="${{ inputs.platform }}"
 
       - name: Tag dev (alias of the immutable commit SHA, main push only)
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}

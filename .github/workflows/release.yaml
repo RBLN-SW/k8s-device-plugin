@@ -27,6 +27,7 @@ jobs:
       image_repository: rebellions/k8s-device-plugin
       image_tag: ${{ github.ref_name }}-arm64
       runner: ubuntu-22.04-rbln-arm
+      platform: linux/arm64
     secrets:
       registry_id: ${{ secrets.DOCKERHUB_USERNAME }}
       registry_password: ${{ secrets.DOCKERHUB_PASSWORD }}
