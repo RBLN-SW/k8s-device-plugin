@@ -214,7 +214,7 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 	}
 
 	sort.Strings(busIDs)
-	klog.V(4).InfoS(
+	klog.InfoS(
 		"starting container allocation",
 		"resourceName", p.resourceName,
 		"deviceIDs", deviceIDs,
@@ -240,13 +240,12 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 		Devices:     deviceSpecs,
 	}
 
-	klog.V(4).InfoS(
+	klog.InfoS(
 		"completed container allocation",
 		"resourceName", p.resourceName,
 		"deviceIDs", deviceIDs,
 		"busIDs", busIDs,
 		"hostRsdPath", hostRsdPath,
-		"deviceSpecCount", len(deviceSpecs),
 	)
 
 	return response, nil
@@ -328,7 +327,24 @@ func (p *ResourcePlugin) register(ctx context.Context) error {
 		return fmt.Errorf("register resource %s: %w", p.resourceName, err)
 	}
 
-	klog.InfoS("registered device plugin", "resourceName", p.resourceName, "socketPath", p.socketPath)
+	deviceIDs := sortedDeviceIDs(p.devices)
+	klog.InfoS("registered device plugin",
+		"resourceName", p.resourceName,
+		"deviceCount", len(p.devices),
+		"deviceIDs", deviceIDs,
+		"socketPath", p.socketPath,
+	)
+	for _, id := range deviceIDs {
+		info := p.devices[id].Info
+		klog.InfoS("device exposed",
+			"resourceName", p.resourceName,
+			"name", info.Name,
+			"pciDeviceID", info.PCIDeviceID,
+			"pciBusID", info.PCIBusID,
+			"product", info.ProductName,
+			"numa", info.PCINumaNode,
+		)
+	}
 	return nil
 }
 
