@@ -24,6 +24,7 @@ const (
 	deviceNodePollTimeout  = 5 * time.Second
 	deviceNodePollInterval = 100 * time.Millisecond
 	registerTimeout        = 10 * time.Second
+	rdsDeviceGlob          = "/dev/rblnfs*"
 )
 
 type ResourcePlugin struct {
@@ -163,6 +164,7 @@ func (p *ResourcePlugin) Allocate(_ context.Context, request *pluginapi.Allocate
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
+		containerResponse.Devices = append(containerResponse.Devices, p.allocateRDS()...)
 		response.ContainerResponses = append(response.ContainerResponses, containerResponse)
 	}
 
@@ -249,6 +251,32 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 	)
 
 	return response, nil
+}
+
+func (p *ResourcePlugin) allocateRDS() []*pluginapi.DeviceSpec {
+	paths, err := filepath.Glob(rdsDeviceGlob)
+	if err != nil || len(paths) == 0 {
+		return nil
+	}
+
+	specs := make([]*pluginapi.DeviceSpec, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		specs = append(specs, &pluginapi.DeviceSpec{
+			ContainerPath: path,
+			HostPath:      path,
+			Permissions:   "rw",
+		})
+	}
+	if len(specs) == 0 {
+		return nil
+	}
+
+	klog.InfoS("exposing rds devices", "resourceName", p.resourceName, "paths", paths)
+	return specs
 }
 
 func (p *ResourcePlugin) selectedDevices(deviceIDs []string) ([]NPUDevice, error) {
