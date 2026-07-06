@@ -164,7 +164,14 @@ func (p *ResourcePlugin) Allocate(_ context.Context, request *pluginapi.Allocate
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		containerResponse.Devices = append(containerResponse.Devices, p.allocateRDS()...)
+		if rdsDevicePresent() {
+			annotations, err := p.cdi.RDSAnnotations(containerResponse.Annotations)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "create RDS CDI annotations: %v", err)
+			}
+			containerResponse.Annotations = annotations
+			klog.InfoS("requesting rds via CDI", "resourceName", p.resourceName)
+		}
 		response.ContainerResponses = append(response.ContainerResponses, containerResponse)
 	}
 
@@ -253,30 +260,18 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 	return response, nil
 }
 
-func (p *ResourcePlugin) allocateRDS() []*pluginapi.DeviceSpec {
+func rdsDevicePresent() bool {
 	paths, err := filepath.Glob(rdsDeviceGlob)
-	if err != nil || len(paths) == 0 {
-		return nil
+	if err != nil {
+		return false
 	}
-
-	specs := make([]*pluginapi.DeviceSpec, 0, len(paths))
 	for _, path := range paths {
 		info, err := os.Stat(path)
-		if err != nil || info.IsDir() {
-			continue
+		if err == nil && !info.IsDir() {
+			return true
 		}
-		specs = append(specs, &pluginapi.DeviceSpec{
-			ContainerPath: path,
-			HostPath:      path,
-			Permissions:   "rw",
-		})
 	}
-	if len(specs) == 0 {
-		return nil
-	}
-
-	klog.InfoS("exposing rds devices", "resourceName", p.resourceName, "paths", paths)
-	return specs
+	return false
 }
 
 func (p *ResourcePlugin) selectedDevices(deviceIDs []string) ([]NPUDevice, error) {

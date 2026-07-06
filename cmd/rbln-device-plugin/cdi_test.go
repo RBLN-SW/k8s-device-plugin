@@ -41,6 +41,31 @@ func TestCDIHandlerRuntimeAnnotations(t *testing.T) {
 	}
 }
 
+func TestCDIHandlerRDSAnnotations(t *testing.T) {
+	t.Parallel()
+
+	cdi, err := NewCDIHandler(t.TempDir())
+	if err != nil {
+		t.Fatalf("new CDI handler: %v", err)
+	}
+
+	annotations, err := cdi.RuntimeAnnotations()
+	if err != nil {
+		t.Fatalf("runtime annotations: %v", err)
+	}
+	annotations, err = cdi.RDSAnnotations(annotations)
+	if err != nil {
+		t.Fatalf("rds annotations: %v", err)
+	}
+
+	if got := annotations["cdi.k8s.io/rebellions.ai_rds"]; got != consts.CDIVendor+"/"+consts.RDSCDIClass+"="+consts.RDSCDIAllDevice {
+		t.Fatalf("unexpected rds annotation value %q", got)
+	}
+	if got := annotations["cdi.k8s.io/rebellions.ai_npu"]; got != consts.CDIKind+"="+consts.BaseCDIDevice {
+		t.Fatalf("runtime annotation lost after adding rds annotation: %q", got)
+	}
+}
+
 func TestAllocateReturnsRuntimeAnnotationAndDeviceSpecs(t *testing.T) {
 	t.Parallel()
 

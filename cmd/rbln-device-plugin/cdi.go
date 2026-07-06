@@ -57,6 +57,15 @@ func (cdi *CDIHandler) RuntimeAnnotations() (map[string]string, error) {
 	)
 }
 
+func (cdi *CDIHandler) RDSAnnotations(annotations map[string]string) (map[string]string, error) {
+	return cdiapi.UpdateAnnotations(
+		annotations,
+		cdi.vendor(),
+		consts.RDSCDIClass,
+		[]string{cdiparser.QualifiedName(cdi.vendor(), consts.RDSCDIClass, consts.RDSCDIAllDevice)},
+	)
+}
+
 func (cdi *CDIHandler) class() string {
 	return consts.CDIClass
 }
