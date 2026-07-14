@@ -17,6 +17,13 @@ MKDIR ?= mkdir
 DISTRIBUTIONS := ubuntu22.04
 DOCKERFILE := $(CURDIR)/deployments/container/Dockerfile
 PLATFORM ?= linux/amd64
+PUSH_ON_BUILD ?= false
+
+ifeq ($(PUSH_ON_BUILD),true)
+OUTPUT_OPTION = --push
+else
+OUTPUT_OPTION = --load
+endif
 
 include $(CURDIR)/common.mk
 
@@ -24,7 +31,7 @@ IMAGE_TAG := $(VERSION)
 IMAGE = $(IMAGE_NAME):$(IMAGE_TAG)
 
 ##### Public rules #####
-.PHONY: $(DISTRIBUTIONS) build push
+.PHONY: $(DISTRIBUTIONS) build
 
 build: ubuntu22.04
 
@@ -33,7 +40,8 @@ ubuntu22.04: BASE_IMAGE = docker.io/ubuntu:22.04
 # Use a generic build target to build the relevant images
 $(DISTRIBUTIONS):
 	DOCKER_BUILDKIT=1 \
-		docker build --pull \
+		docker buildx build --pull \
+		$(OUTPUT_OPTION) \
 		--platform=$(PLATFORM) \
 		--tag $(IMAGE) \
 		--build-arg GOLANG_VERSION="$(GOLANG_VERSION)" \
@@ -41,7 +49,4 @@ $(DISTRIBUTIONS):
 		--build-arg VERSION="$(VERSION)" \
 		-f $(DOCKERFILE) \
 		$(CURDIR)
-
-push:
-	docker push $(IMAGE)
 
