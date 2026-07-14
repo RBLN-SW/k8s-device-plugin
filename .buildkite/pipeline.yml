@@ -93,10 +93,11 @@ steps:
       echo "$$REBEL_SW_DEV_PASSWORD" | docker login "${HARBOR_HOST}" \
         --username "$$REBEL_SW_DEV_USERNAME" --password-stdin
 
-      make -f deployments/container/Makefile build push \
+      make -f deployments/container/Makefile build \
         IMAGE_NAME="${IMAGE_REGISTRY}/k8s-device-plugin" \
         IMAGE_TAG="$$IMAGE_TAG" \
-        VERSION="$$IMAGE_TAG"
+        VERSION="$$IMAGE_TAG" \
+        PUSH_ON_BUILD=true
 
   - label: ":pytest: container scenario"
     key: container

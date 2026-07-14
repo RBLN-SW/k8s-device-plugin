@@ -60,11 +60,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make -f deployments/container/Makefile build push \
+          make -f deployments/container/Makefile build \
             IMAGE_NAME="${{ inputs.image_repository }}" \
             IMAGE_TAG="${{ inputs.image_tag }}" \
             VERSION="${{ inputs.image_tag }}" \
-            PLATFORM="${{ inputs.platform }}"
+            PLATFORM="${{ inputs.platform }}" \
+            PUSH_ON_BUILD=true
 
       - name: Tag dev (alias of the immutable commit SHA, main push only)
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}

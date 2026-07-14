@@ -32,11 +32,8 @@ helm install --wait --generate-name \
 ```bash
 make -f deployments/container/Makefile build \
   IMAGE_NAME=<registry>/k8s-device-plugin \
-  VERSION=<tag>
-
-make -f deployments/container/Makefile push \
-  IMAGE_NAME=<registry>/k8s-device-plugin \
-  VERSION=<tag>
+  VERSION=<tag> \
+  PUSH_ON_BUILD=true
 ```
 
 2. Install the Helm chart from this repository:
