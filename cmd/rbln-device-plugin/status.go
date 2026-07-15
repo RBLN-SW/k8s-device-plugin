@@ -36,6 +36,8 @@ func readDeviceStatus(deviceName string) (int, error) {
 	return status, nil
 }
 
+// TODO: A future KMD version inserts a PROBING state at value 2, shifting
+// INIT/FAULT/FINISH to 3/4/5 — update this mapping once that version ships.
 func deviceStatusName(status int) string {
 	switch status {
 	case deviceStatusReady:
