@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	rblndevice "github.com/rbln-sw/rblnlib-go/pkg/device"
+	"k8s.io/klog/v2"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 
 	"github.com/RBLN-SW/k8s-device-plugin/pkg/consts"
@@ -25,17 +26,23 @@ type DeviceGroup struct {
 	Devices      map[string]NPUDevice
 }
 
-func discoverDeviceGroups(ctx context.Context, useGenericResourceName bool) (map[string]DeviceGroup, error) {
+func discoverDeviceGroups(ctx context.Context, useGenericResourceName bool) map[string]DeviceGroup {
+	groups := make(map[string]DeviceGroup)
+
 	devices, err := getDevices(ctx)
 	if err != nil {
-		return nil, err
+		klog.ErrorS(err, "device discovery failed; reporting zero devices until it recovers")
+		return groups
 	}
 
-	groups := make(map[string]DeviceGroup)
 	for _, device := range devices {
 		resourceName, err := resourceNameForProduct(device.ProductName, useGenericResourceName)
 		if err != nil {
-			return nil, err
+			klog.ErrorS(err, "skipping device with unsupported product",
+				"device", device.Name,
+				"product", device.ProductName,
+			)
+			continue
 		}
 		group, ok := groups[resourceName]
 		if !ok {
@@ -51,7 +58,7 @@ func discoverDeviceGroups(ctx context.Context, useGenericResourceName bool) (map
 		groups[resourceName] = group
 	}
 
-	return groups, nil
+	return groups
 }
 
 func resourceNameForProduct(productName string, useGenericResourceName bool) (string, error) {
