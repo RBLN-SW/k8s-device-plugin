@@ -335,7 +335,8 @@ func (p *ResourcePlugin) register(ctx context.Context) error {
 		"socketPath", p.socketPath,
 	)
 	for _, id := range deviceIDs {
-		info := p.devices[id].Info
+		device := p.devices[id]
+		info := device.Info
 		klog.InfoS("device exposed",
 			"resourceName", p.resourceName,
 			"name", info.Name,
@@ -343,6 +344,7 @@ func (p *ResourcePlugin) register(ctx context.Context) error {
 			"pciBusID", info.PCIBusID,
 			"product", info.ProductName,
 			"numa", info.PCINumaNode,
+			"health", device.Health,
 		)
 	}
 	return nil
@@ -358,7 +360,8 @@ func cloneDeviceMap(devices map[string]NPUDevice) map[string]NPUDevice {
 	cloned := make(map[string]NPUDevice, len(devices))
 	for id, device := range devices {
 		cloned[id] = NPUDevice{
-			Info: device.Info,
+			Info:   device.Info,
+			Health: device.Health,
 		}
 	}
 	return cloned

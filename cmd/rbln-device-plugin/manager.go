@@ -131,10 +131,7 @@ func (m *Manager) restart(ctx context.Context) error {
 }
 
 func (m *Manager) reconcile(ctx context.Context) error {
-	groups, err := discoverDeviceGroups(ctx, m.config.flags.useGenericResourceName)
-	if err != nil {
-		return err
-	}
+	groups := discoverDeviceGroups(ctx, m.config.flags.useGenericResourceName)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
