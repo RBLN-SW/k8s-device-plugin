@@ -25,6 +25,7 @@ type Flags struct {
 	healthcheckPort         int
 	useGenericResourceName  bool
 	deviceScanInterval      time.Duration
+	otlpEndpoint            string
 }
 
 type Config struct {
@@ -92,6 +93,12 @@ func newApp(logSettings logging.Settings) *cli.App {
 			Destination: &flags.deviceScanInterval,
 			EnvVars:     []string{"DEVICE_SCAN_INTERVAL"},
 		},
+		&cli.StringFlag{
+			Name:        "otlp-endpoint",
+			Usage:       "OTLP gRPC endpoint (e.g. host:port) to export allocation traces to. Leave empty to disable tracing.",
+			Destination: &flags.otlpEndpoint,
+			EnvVars:     []string{"OTEL_EXPORTER_OTLP_ENDPOINT"},
+		},
 	}
 
 	app := &cli.App{
@@ -145,6 +152,20 @@ func Run(ctx context.Context, config *Config) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	watchShutdownSignals(ctx, cancel)
+
+	shutdownTracing, err := initTracing(ctx, config.flags.otlpEndpoint, version)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// ctx is already canceled once we get here, so flush on a fresh,
+		// bounded context to give buffered spans a chance to reach the backend.
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			slog.Warn("Failed to flush traces on shutdown", "err", err)
+		}
+	}()
 
 	manager, err := NewManager(config)
 	if err != nil {
