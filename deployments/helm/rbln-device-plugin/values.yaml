@@ -27,6 +27,9 @@ devicePlugin:
   kubeletDevicePluginPath: /var/lib/kubelet/device-plugins
   cdiRoot: /var/run/cdi
   useGenericResourceName: true
+  # OTLP gRPC endpoint (host:port) for exporting NPU allocation traces.
+  # Leave empty to disable tracing.
+  otlpEndpoint: ""
   containers:
     plugin:
       securityContext:

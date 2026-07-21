@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/rbln-sw/rblnlib-go/pkg/rsdgroup"
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -153,14 +156,21 @@ func (p *ResourcePlugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.Devic
 	}
 }
 
-func (p *ResourcePlugin) Allocate(_ context.Context, request *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
+func (p *ResourcePlugin) Allocate(ctx context.Context, request *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
+	ctx, span := tracer.Start(ctx, "Allocate", trace.WithAttributes(
+		attribute.String(attrResourceName, p.resourceName),
+	))
+	defer span.End()
+
 	response := &pluginapi.AllocateResponse{
 		ContainerResponses: make([]*pluginapi.ContainerAllocateResponse, 0, len(request.ContainerRequests)),
 	}
 
 	for _, containerRequest := range request.ContainerRequests {
-		containerResponse, err := p.allocateContainer(containerRequest.DevicesIds)
+		containerResponse, err := p.allocateContainer(ctx, containerRequest.DevicesIds)
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, "container allocation failed")
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		response.ContainerResponses = append(response.ContainerResponses, containerResponse)
@@ -192,28 +202,46 @@ func (p *ResourcePlugin) GetPreferredAllocation(_ context.Context, request *plug
 	return response, nil
 }
 
-func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.ContainerAllocateResponse, error) {
+func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []string) (*pluginapi.ContainerAllocateResponse, error) {
+	_, span := tracer.Start(ctx, "allocateContainer", trace.WithAttributes(
+		attribute.String(attrResourceName, p.resourceName),
+		attribute.StringSlice(attrDeviceIDs, deviceIDs),
+		attribute.Int(attrDeviceCount, len(deviceIDs)),
+	))
+	defer span.End()
+
+	recordErr := func(err error) error {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+		klog.ErrorS(err, "container allocation failed",
+			"resourceName", p.resourceName,
+			"deviceIDs", deviceIDs,
+		)
+		return err
+	}
+
 	if len(deviceIDs) == 0 {
-		return nil, fmt.Errorf("container request does not include any device IDs")
+		return nil, recordErr(fmt.Errorf("container request does not include any device IDs"))
 	}
 	if p.cdi == nil {
-		return nil, fmt.Errorf("CDI handler is not configured")
+		return nil, recordErr(fmt.Errorf("CDI handler is not configured"))
 	}
 
 	selected, err := p.selectedDevices(deviceIDs)
 	if err != nil {
-		return nil, err
+		return nil, recordErr(err)
 	}
 
 	busIDs := make([]string, 0, len(selected))
 	for _, device := range selected {
 		if device.Info.PCIBusID == "" {
-			return nil, fmt.Errorf("device %q is missing PCIBusID", device.Info.Name)
+			return nil, recordErr(fmt.Errorf("device %q is missing PCIBusID", device.Info.Name))
 		}
 		busIDs = append(busIDs, device.Info.PCIBusID)
 	}
 
 	sort.Strings(busIDs)
+	span.SetAttributes(attribute.StringSlice(attrBusIDs, busIDs))
 	klog.InfoS(
 		"starting container allocation",
 		"resourceName", p.resourceName,
@@ -222,17 +250,18 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 	)
 	hostRsdPath, err := p.rsdGroupFn(busIDs)
 	if err != nil {
-		return nil, fmt.Errorf("recreate RSD group for bus IDs %v: %w", busIDs, err)
+		return nil, recordErr(fmt.Errorf("recreate RSD group for bus IDs %v: %w", busIDs, err))
 	}
+	span.SetAttributes(attribute.String(attrRsdHostPath, hostRsdPath))
 
 	deviceSpecs, err := deviceSpecsForDevices(selected, hostRsdPath)
 	if err != nil {
-		return nil, err
+		return nil, recordErr(err)
 	}
 
 	annotations, err := p.cdi.RuntimeAnnotations()
 	if err != nil {
-		return nil, fmt.Errorf("create CDI runtime annotations: %w", err)
+		return nil, recordErr(fmt.Errorf("create CDI runtime annotations: %w", err))
 	}
 
 	response := &pluginapi.ContainerAllocateResponse{

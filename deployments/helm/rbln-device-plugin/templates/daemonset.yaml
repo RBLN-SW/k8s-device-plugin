@@ -58,6 +58,14 @@ spec:
           value: {{ .Values.devicePlugin.useGenericResourceName | quote }}
         - name: HEALTHCHECK_PORT
           value: {{ .Values.devicePlugin.containers.plugin.healthcheckPort | quote }}
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        {{- if .Values.devicePlugin.otlpEndpoint }}
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: {{ .Values.devicePlugin.otlpEndpoint | quote }}
+        {{- end }}
         volumeMounts:
         - name: device-plugins
           mountPath: {{ .Values.devicePlugin.kubeletDevicePluginPath | quote }}
