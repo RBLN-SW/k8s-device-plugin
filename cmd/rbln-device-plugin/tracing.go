@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -61,6 +62,12 @@ func initTracing(ctx context.Context, endpoint, serviceVersion string) (func(con
 func newOTLPExporter(ctx context.Context, endpoint string) (sdktrace.SpanExporter, error) {
 	var opts []otlptracegrpc.Option
 	if strings.Contains(endpoint, "://") {
+		// WithEndpointURL swallows a parse failure (it logs and silently falls
+		// back to the default localhost endpoint), so validate up front and
+		// surface a malformed endpoint as an explicit error instead.
+		if _, err := url.Parse(endpoint); err != nil {
+			return nil, fmt.Errorf("parse OTLP endpoint URL %q: %w", endpoint, err)
+		}
 		opts = append(opts, otlptracegrpc.WithEndpointURL(endpoint))
 	} else {
 		opts = append(opts, otlptracegrpc.WithEndpoint(endpoint), otlptracegrpc.WithInsecure())
