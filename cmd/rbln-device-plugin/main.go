@@ -155,7 +155,15 @@ func Run(ctx context.Context, config *Config) error {
 
 	shutdownTracing, err := initTracing(ctx, config.flags.otlpEndpoint, version)
 	if err != nil {
-		return err
+		// Tracing is best-effort observability; a malformed endpoint or a
+		// failed exporter setup must not take down NPU scheduling on the node.
+		// Warn, not error: the plugin handled it and keeps scheduling NPUs —
+		// only the trace stream is missing.
+		slog.Warn("Tracing setup failed; continuing without distributed tracing",
+			"err", err,
+			"otlpEndpoint", config.flags.otlpEndpoint,
+		)
+		shutdownTracing = func(context.Context) error { return nil }
 	}
 	defer func() {
 		// ctx is already canceled once we get here, so flush on a fresh,
