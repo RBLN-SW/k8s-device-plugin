@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/urfave/cli/v2"
+	"k8s.io/klog/v2"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 
 	"github.com/RBLN-SW/k8s-device-plugin/pkg/flags"
@@ -26,6 +27,7 @@ type Flags struct {
 	healthcheckPort         int
 	useGenericResourceName  bool
 	deviceScanInterval      time.Duration
+	otlpEndpoint            string
 }
 
 type Config struct {
@@ -83,6 +85,12 @@ func newApp() *cli.App {
 			Destination: &flags.deviceScanInterval,
 			EnvVars:     []string{"DEVICE_SCAN_INTERVAL"},
 		},
+		&cli.StringFlag{
+			Name:        "otlp-endpoint",
+			Usage:       "OTLP gRPC endpoint (e.g. host:port) to export allocation traces to. Leave empty to disable tracing.",
+			Destination: &flags.otlpEndpoint,
+			EnvVars:     []string{"OTEL_EXPORTER_OTLP_ENDPOINT"},
+		},
 	}
 	cliFlags = append(cliFlags, flags.loggingConfig.Flags()...)
 
@@ -117,6 +125,24 @@ func Run(ctx context.Context, config *Config) error {
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
+
+	shutdownTracing, err := initTracing(ctx, config.flags.otlpEndpoint, version)
+	if err != nil {
+		// Tracing is best-effort observability; a malformed endpoint or a
+		// failed exporter setup must not take down NPU scheduling on the node.
+		klog.ErrorS(err, "failed to connect to OpenTelemetry collector; continuing without distributed tracing",
+			"endpoint", config.flags.otlpEndpoint)
+		shutdownTracing = func(context.Context) error { return nil }
+	}
+	defer func() {
+		// ctx is already canceled once we get here, so flush on a fresh,
+		// bounded context to give buffered spans a chance to reach the backend.
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			klog.ErrorS(err, "failed to flush traces on shutdown")
+		}
+	}()
 
 	manager, err := NewManager(ctx, config)
 	if err != nil {
