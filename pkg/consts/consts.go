@@ -8,4 +8,6 @@ const (
 	AtomResourceName    = CDIVendor + "/ATOM"
 	RebelResourceName   = CDIVendor + "/REBEL"
 	BaseCDIDevice       = "runtime"
+	RDSCDIClass         = "rds"
+	RDSCDIAllDevice     = "all"
 )
