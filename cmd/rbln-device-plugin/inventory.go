@@ -28,6 +28,9 @@ type NPUDevice struct {
 	// StatusName is the underlying device status ("READY", "FAULT", ...), kept
 	// alongside the coarse kubelet health so logs can say why a device is down.
 	StatusName string
+	// ParentPFBusID is the PCI address of the parent physical function when
+	// this device is an SR-IOV VF; empty otherwise.
+	ParentPFBusID string
 }
 
 type DeviceGroup struct {
@@ -45,8 +48,27 @@ func discoverDeviceGroups(ctx context.Context, useGenericResourceName bool) map[
 	}
 
 	for _, device := range devices {
-		resourceName, err := resourceNameForProduct(device.ProductName, useGenericResourceName)
+		sriov, err := probeSRIOV(device.PCIBusID)
 		if err != nil {
+			slog.Error("Skipping device with indeterminate SR-IOV state",
+				"err", err,
+				"device", device.Name,
+				"pciBusID", device.PCIBusID,
+			)
+			continue
+		}
+		resourceName, advertise, err := resourceForDevice(device, sriov, useGenericResourceName)
+		if err != nil {
+			if sriov.class == sriovClassVF {
+				slog.Error("Skipping VF with unsupported SR-IOV partition mode",
+					"err", err,
+					"device", device.Name,
+					"pciBusID", device.PCIBusID,
+					"parentPFBusID", sriov.parentPFBusID,
+					"numVFs", sriov.numVFs,
+				)
+				continue
+			}
 			if _, seen := unsupportedProductsLogged.LoadOrStore(device.Name+"/"+device.ProductName, struct{}{}); !seen {
 				slog.Error("Skipping device with unsupported product; it stays invisible to Kubernetes",
 					"err", err,
@@ -54,6 +76,14 @@ func discoverDeviceGroups(ctx context.Context, useGenericResourceName bool) map[
 					"product", device.ProductName,
 				)
 			}
+			continue
+		}
+		if !advertise {
+			slog.Debug("Excluding VF-hosting PF from advertisement",
+				"device", device.Name,
+				"pciBusID", device.PCIBusID,
+				"numVFs", sriov.numVFs,
+			)
 			continue
 		}
 		group, ok := groups[resourceName]
@@ -65,9 +95,10 @@ func discoverDeviceGroups(ctx context.Context, useGenericResourceName bool) map[
 		}
 		health, statusName := healthForDevice(device.Name)
 		group.Devices[device.Name] = NPUDevice{
-			Info:       device,
-			Health:     health,
-			StatusName: statusName,
+			Info:          device,
+			Health:        health,
+			StatusName:    statusName,
+			ParentPFBusID: sriov.parentPFBusID,
 		}
 		groups[resourceName] = group
 	}
@@ -155,6 +186,45 @@ func healthCounts(devices map[string]NPUDevice) (healthy, unhealthy int) {
 		healthy++
 	}
 	return healthy, unhealthy
+}
+
+// resourceForDevice maps a device's SR-IOV classification to the resource it
+// is advertised under. Every device falls into exactly one of three classes:
+//
+//  1. VF (physfn present): always rebellions.ai/npu-vf<N>, where N is the
+//     parent PF's sriov_numvfs, regardless of useGenericResourceName.
+//  2. Non-partitioned PF (sriov_numvfs == 0 or absent): the pre-existing
+//     product-based resource naming, unchanged.
+//  3. VF-hosting PF (sriov_numvfs > 0): not advertised. In the current
+//     driver generation, enabling SR-IOV removes the PF from the RSD compute
+//     topology (its npu_id disappears), so it is not a usable compute
+//     endpoint; advertising it alongside its VFs would double-count compute
+//     that does not exist.
+//
+// If a future partial-partitioning mode lets a PF stay usable with its
+// remaining chiplets, only branch 3 should change: decide whether the PF is
+// usable from a real signal (e.g. presence of npu_id in rbln-smd v1
+// DeviceInfo) and let usable hosting PFs fall through to branch 2, at which
+// point the PF (existing resource name) and its VFs (npu-vf<N>) are
+// advertised at the same time. Do not implement that today — the current
+// driver cannot produce that state.
+func resourceForDevice(device rblndevice.Device, sriov sriovInfo, useGenericResourceName bool) (string, bool, error) {
+	switch sriov.class {
+	case sriovClassVF:
+		resourceName, err := vfResourceName(sriov.numVFs)
+		if err != nil {
+			return "", false, fmt.Errorf("VF %s (parent PF %s): %w", device.Name, sriov.parentPFBusID, err)
+		}
+		return resourceName, true, nil
+	case sriovClassHostingPF:
+		return "", false, nil
+	default:
+		resourceName, err := resourceNameForProduct(device.ProductName, useGenericResourceName)
+		if err != nil {
+			return "", false, err
+		}
+		return resourceName, true, nil
+	}
 }
 
 func resourceNameForProduct(productName string, useGenericResourceName bool) (string, error) {

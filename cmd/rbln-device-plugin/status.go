@@ -70,6 +70,11 @@ func deviceStatusName(status int) string {
 func healthForDevice(deviceName string) (health, statusName string) {
 	status, err := readDeviceStatus(deviceName)
 	if err != nil {
+		// SR-IOV VFs may not expose a status file under
+		// /sys/class/rebellions at all (unverified on real hardware); this
+		// read-failure default then means such VFs are always reported
+		// Healthy. Revisit the default once VF status semantics are
+		// confirmed.
 		slog.Debug("Failed to read device status; assuming healthy", "err", err, "device", deviceName)
 		return pluginapi.Healthy, deviceStatusUnreadable
 	}
