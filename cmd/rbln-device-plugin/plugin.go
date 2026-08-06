@@ -220,9 +220,16 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 		"deviceIDs", deviceIDs,
 		"busIDs", busIDs,
 	)
-	hostRsdPath, err := p.rsdGroupFn(busIDs)
-	if err != nil {
-		return nil, fmt.Errorf("recreate RSD group for bus IDs %v: %w", busIDs, err)
+	// SR-IOV VFs are allocated without an RSD group: RSD grouping and SR-IOV
+	// do not compose (no P2P DMA between VFs), and the underlying group
+	// operation only accepts PF bus IDs. An empty hostRsdPath also omits the
+	// /dev/rsd0 device spec below.
+	hostRsdPath := ""
+	if !isVFResourceName(p.resourceName) {
+		hostRsdPath, err = p.rsdGroupFn(busIDs)
+		if err != nil {
+			return nil, fmt.Errorf("recreate RSD group for bus IDs %v: %w", busIDs, err)
+		}
 	}
 
 	deviceSpecs, err := deviceSpecsForDevices(selected, hostRsdPath)
@@ -360,8 +367,9 @@ func cloneDeviceMap(devices map[string]NPUDevice) map[string]NPUDevice {
 	cloned := make(map[string]NPUDevice, len(devices))
 	for id, device := range devices {
 		cloned[id] = NPUDevice{
-			Info:   device.Info,
-			Health: device.Health,
+			Info:          device.Info,
+			Health:        device.Health,
+			ParentPFBusID: device.ParentPFBusID,
 		}
 	}
 	return cloned

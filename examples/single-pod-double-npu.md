@@ -1,6 +1,6 @@
 # Single Pod Requesting Two NPUs
 
-하나의 파드가 NPU 두 개를 동시에 할당받는 예제입니다.
+A single pod requesting two NPUs at once.
 
 ## Apply
 
@@ -24,9 +24,9 @@ spec:
     args: ["trap 'exit 0' TERM; sleep 9999 & wait"]
     resources:
       limits:
-        rebellions.ai/ATOM: 2
+        rebellions.ai/npu: 2
       requests:
-        rebellions.ai/ATOM: 2
+        rebellions.ai/npu: 2
 EOF
 ```
 
