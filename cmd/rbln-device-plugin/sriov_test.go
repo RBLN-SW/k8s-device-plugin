@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/RBLN-SW/k8s-device-plugin/pkg/consts"
 )
 
 // TestProbeSRIOV is not parallel: it mutates the shared package-level
@@ -133,32 +131,6 @@ func TestVFResourceName(t *testing.T) {
 			}
 			if actual != tc.expected {
 				t.Fatalf("expected %q, got %q", tc.expected, actual)
-			}
-		})
-	}
-}
-
-func TestIsVFResourceName(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		resourceName string
-		expected     bool
-	}{
-		{resourceName: "rebellions.ai/npu-vf1", expected: true},
-		{resourceName: "rebellions.ai/npu-vf4", expected: true},
-		{resourceName: consts.GenericResourceName, expected: false},
-		{resourceName: consts.AtomResourceName, expected: false},
-		{resourceName: consts.RebelResourceName, expected: false},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.resourceName, func(t *testing.T) {
-			t.Parallel()
-
-			if actual := isVFResourceName(tc.resourceName); actual != tc.expected {
-				t.Fatalf("isVFResourceName(%q) = %v, expected %v", tc.resourceName, actual, tc.expected)
 			}
 		})
 	}

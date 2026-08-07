@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -14,12 +15,16 @@ import (
 // The device is named "null" so the /dev/<name> device-node poll resolves to
 // the always-present /dev/null (same trick as the allocate test in
 // cdi_test.go).
-func TestAllocateVFSkipsRSDGroup(t *testing.T) {
+func TestAllocateVFCreatesRSDGroup(t *testing.T) {
 	t.Parallel()
 
 	cdi, err := NewCDIHandler(t.TempDir())
 	if err != nil {
 		t.Fatalf("new CDI handler: %v", err)
+	}
+	rsdPath := filepath.Join(t.TempDir(), "rsd0")
+	if err := os.WriteFile(rsdPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write rsd device placeholder: %v", err)
 	}
 
 	plugin := NewResourcePlugin(
@@ -38,10 +43,10 @@ func TestAllocateVFSkipsRSDGroup(t *testing.T) {
 			},
 		},
 	)
-	rsdCalled := false
-	plugin.rsdGroupFn = func([]string) (string, error) {
-		rsdCalled = true
-		return "/dev/rsd0", nil
+	var rsdBusIDs []string
+	plugin.rsdGroupFn = func(busIDs []string) (string, error) {
+		rsdBusIDs = busIDs
+		return rsdPath, nil
 	}
 
 	response, err := plugin.Allocate(context.Background(), &pluginapi.AllocateRequest{
@@ -53,8 +58,8 @@ func TestAllocateVFSkipsRSDGroup(t *testing.T) {
 		t.Fatalf("allocate: %v", err)
 	}
 
-	if rsdCalled {
-		t.Fatalf("rsdGroupFn must not be called for VF resources")
+	if len(rsdBusIDs) != 1 || rsdBusIDs[0] != "0000:17:00.1" {
+		t.Fatalf("expected rsdGroupFn to be called with the VF bus ID, got %v", rsdBusIDs)
 	}
 	if len(response.ContainerResponses) != 1 {
 		t.Fatalf("expected 1 container response, got %d", len(response.ContainerResponses))
@@ -63,15 +68,13 @@ func TestAllocateVFSkipsRSDGroup(t *testing.T) {
 	if got := containerResponse.Annotations["cdi.k8s.io/rebellions.ai_npu"]; got != consts.CDIKind+"="+consts.BaseCDIDevice {
 		t.Fatalf("unexpected runtime annotation value %q", got)
 	}
-	if len(containerResponse.Devices) != 1 {
-		t.Fatalf("expected only the VF device spec, got %d specs: %+v", len(containerResponse.Devices), containerResponse.Devices)
+	if len(containerResponse.Devices) != 2 {
+		t.Fatalf("expected rsd and VF device specs, got %d specs: %+v", len(containerResponse.Devices), containerResponse.Devices)
 	}
-	if got := containerResponse.Devices[0]; got.ContainerPath != "/dev/null" || got.HostPath != "/dev/null" || got.Permissions != "rw" {
+	if got := containerResponse.Devices[0]; got.ContainerPath != "/dev/rsd0" || got.HostPath != rsdPath || got.Permissions != "rw" {
+		t.Fatalf("unexpected rsd device spec: %+v", got)
+	}
+	if got := containerResponse.Devices[1]; got.ContainerPath != "/dev/null" || got.HostPath != "/dev/null" || got.Permissions != "rw" {
 		t.Fatalf("unexpected VF device spec: %+v", got)
-	}
-	for _, spec := range containerResponse.Devices {
-		if spec.ContainerPath == "/dev/rsd0" {
-			t.Fatalf("VF allocation must not expose /dev/rsd0")
-		}
 	}
 }

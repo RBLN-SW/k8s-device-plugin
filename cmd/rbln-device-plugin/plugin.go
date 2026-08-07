@@ -220,16 +220,12 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 		"deviceIDs", deviceIDs,
 		"busIDs", busIDs,
 	)
-	// SR-IOV VFs are allocated without an RSD group: RSD grouping and SR-IOV
-	// do not compose (no P2P DMA between VFs), and the underlying group
-	// operation only accepts PF bus IDs. An empty hostRsdPath also omits the
-	// /dev/rsd0 device spec below.
-	hostRsdPath := ""
-	if !isVFResourceName(p.resourceName) {
-		hostRsdPath, err = p.rsdGroupFn(busIDs)
-		if err != nil {
-			return nil, fmt.Errorf("recreate RSD group for bus IDs %v: %w", busIDs, err)
-		}
+	// VFs get their own RSD group exactly like PFs (confirmed with SSW): the
+	// runtime requires a dedicated, freshly created group node — never the
+	// shared default rsd0 — for VF workloads too.
+	hostRsdPath, err := p.rsdGroupFn(busIDs)
+	if err != nil {
+		return nil, fmt.Errorf("recreate RSD group for bus IDs %v: %w", busIDs, err)
 	}
 
 	deviceSpecs, err := deviceSpecsForDevices(selected, hostRsdPath)

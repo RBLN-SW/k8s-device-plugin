@@ -104,7 +104,3 @@ func vfResourceName(numVFs int) (string, error) {
 		return "", fmt.Errorf("unsupported SR-IOV partition mode with %d VFs per PF: supported modes are 1 and 4", numVFs)
 	}
 }
-
-func isVFResourceName(resourceName string) bool {
-	return strings.HasPrefix(resourceName, consts.VFResourceNamePrefix)
-}
