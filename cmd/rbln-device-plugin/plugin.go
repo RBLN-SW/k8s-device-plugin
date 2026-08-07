@@ -220,6 +220,9 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 		"deviceIDs", deviceIDs,
 		"busIDs", busIDs,
 	)
+	// VFs get their own RSD group exactly like PFs (confirmed with SSW): the
+	// runtime requires a dedicated, freshly created group node — never the
+	// shared default rsd0 — for VF workloads too.
 	hostRsdPath, err := p.rsdGroupFn(busIDs)
 	if err != nil {
 		return nil, fmt.Errorf("recreate RSD group for bus IDs %v: %w", busIDs, err)
@@ -360,8 +363,9 @@ func cloneDeviceMap(devices map[string]NPUDevice) map[string]NPUDevice {
 	cloned := make(map[string]NPUDevice, len(devices))
 	for id, device := range devices {
 		cloned[id] = NPUDevice{
-			Info:   device.Info,
-			Health: device.Health,
+			Info:          device.Info,
+			Health:        device.Health,
+			ParentPFBusID: device.ParentPFBusID,
 		}
 	}
 	return cloned

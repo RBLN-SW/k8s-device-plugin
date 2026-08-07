@@ -78,7 +78,15 @@ func newTopologyAllocator(devices map[string]NPUDevice) *topologyAllocator {
 
 	for _, deviceID := range sortedDeviceIDs(devices) {
 		device := devices[deviceID]
+		// SR-IOV VFs group by their parent PF instead of SID: filling one
+		// PF's VFs first keeps whole PFs free for larger requests. The SID
+		// (inherited from the parent PF) and the PF-only PCI bridge
+		// assumptions below do not hold for VFs.
+		isVF := device.ParentPFBusID != ""
 		groupID := device.Info.SID
+		if isVF {
+			groupID = device.ParentPFBusID
+		}
 		if groupID == "" {
 			groupID = deviceID
 		}
@@ -90,7 +98,7 @@ func newTopologyAllocator(devices map[string]NPUDevice) *topologyAllocator {
 				group.hasNUMA = true
 				group.numa = numa
 			}
-			if bridgeIndex, ok := bridgeIndexForDevice(device); ok && device.Info.PCIBusID != "" {
+			if bridgeIndex, ok := bridgeIndexForDevice(device); !isVF && ok && device.Info.PCIBusID != "" {
 				if bridge, err := getPCIBridge(device.Info.PCIBusID, bridgeIndex); err == nil {
 					group.hasBridge = true
 					group.bridge = bridge

@@ -26,6 +26,10 @@ devicePlugin:
   affinity: {}
   kubeletDevicePluginPath: /var/lib/kubelet/device-plugins
   cdiRoot: /var/run/cdi
+  # On SR-IOV partitioned nodes, VFs are always advertised as
+  # rebellions.ai/npu-vf<N> (N = VFs per PF; supported modes: 1 and 4),
+  # regardless of this setting. No chart value is needed for VF mode; the
+  # plugin detects partitioning from sysfs.
   useGenericResourceName: true
   containers:
     plugin:

@@ -175,6 +175,73 @@ func TestGetPreferredAllocationAndOptions(t *testing.T) {
 	}
 }
 
+// VF SIDs are inherited from the parent PF (firmware limitation), so every
+// VF in these tests shares one SID: they prove grouping runs on
+// ParentPFBusID, not SID.
+func TestSelectPreferredDeviceIDsPacksVFsByParentPF(t *testing.T) {
+	plugin := testPluginWithDevices(map[string]NPUDevice{
+		"rbln0-0": testVFDevice("rbln0-0", "0000:17:00.1", "0000:17:00.0", "0"),
+		"rbln0-1": testVFDevice("rbln0-1", "0000:17:00.2", "0000:17:00.0", "0"),
+		"rbln0-2": testVFDevice("rbln0-2", "0000:17:00.3", "0000:17:00.0", "0"),
+		"rbln0-3": testVFDevice("rbln0-3", "0000:17:00.4", "0000:17:00.0", "0"),
+		"rbln1-0": testVFDevice("rbln1-0", "0000:38:00.1", "0000:38:00.0", "0"),
+		"rbln1-1": testVFDevice("rbln1-1", "0000:38:00.2", "0000:38:00.0", "0"),
+		"rbln1-2": testVFDevice("rbln1-2", "0000:38:00.3", "0000:38:00.0", "0"),
+		"rbln1-3": testVFDevice("rbln1-3", "0000:38:00.4", "0000:38:00.0", "0"),
+	})
+
+	// The must-include VF pins the second parent PF; the remaining pick must
+	// come from the same parent even though the first parent's device names
+	// sort earlier.
+	selected, err := plugin.selectPreferredDeviceIDs(
+		[]string{"rbln0-0", "rbln0-1", "rbln0-2", "rbln0-3", "rbln1-0", "rbln1-1", "rbln1-2", "rbln1-3"},
+		[]string{"rbln1-1"},
+		2,
+	)
+	if err != nil {
+		t.Fatalf("select preferred devices: %v", err)
+	}
+
+	if len(selected) != 2 {
+		t.Fatalf("expected 2 devices, got %d", len(selected))
+	}
+	if got := uniqueParentPFCount(plugin.devices, selected); got != 1 {
+		t.Fatalf("expected VFs packed into a single parent PF, got %d parents in %v", got, selected)
+	}
+	if got := plugin.devices[selected[0]].ParentPFBusID; got != "0000:38:00.0" {
+		t.Fatalf("expected the must-include parent PF to be filled, got %v", selected)
+	}
+}
+
+func TestSelectPreferredDeviceIDsFillsPartialParentPFFirst(t *testing.T) {
+	plugin := testPluginWithDevices(map[string]NPUDevice{
+		"rbln0-0": testVFDevice("rbln0-0", "0000:17:00.1", "0000:17:00.0", "0"),
+		"rbln0-1": testVFDevice("rbln0-1", "0000:17:00.2", "0000:17:00.0", "0"),
+		"rbln0-2": testVFDevice("rbln0-2", "0000:17:00.3", "0000:17:00.0", "0"),
+		"rbln0-3": testVFDevice("rbln0-3", "0000:17:00.4", "0000:17:00.0", "0"),
+		"rbln1-2": testVFDevice("rbln1-2", "0000:38:00.3", "0000:38:00.0", "0"),
+		"rbln1-3": testVFDevice("rbln1-3", "0000:38:00.4", "0000:38:00.0", "0"),
+	})
+
+	// The second parent PF has only 2 VFs left (the others are already
+	// allocated): a 2-VF request must consume it fully and keep the first
+	// parent whole, even though the first parent's device names sort earlier.
+	selected, err := plugin.selectPreferredDeviceIDs(
+		[]string{"rbln0-0", "rbln0-1", "rbln0-2", "rbln0-3", "rbln1-2", "rbln1-3"},
+		nil,
+		2,
+	)
+	if err != nil {
+		t.Fatalf("select preferred devices: %v", err)
+	}
+
+	for _, deviceID := range selected {
+		if got := plugin.devices[deviceID].ParentPFBusID; got != "0000:38:00.0" {
+			t.Fatalf("expected the partially-free parent PF to be consumed first, got %v", selected)
+		}
+	}
+}
+
 func testPluginWithDevices(devices map[string]NPUDevice) *ResourcePlugin {
 	return NewResourcePlugin("rebellions.ai/ATOM", filepath.Join(os.TempDir(), "rbln-test.sock"), filepath.Join(os.TempDir(), "kubelet.sock"), nil, devices)
 }
@@ -190,6 +257,27 @@ func testDevice(name, sid, pciBusID, numaNode string) NPUDevice {
 			PCINumaNode: numaNode,
 		},
 	}
+}
+
+func testVFDevice(name, pciBusID, parentPFBusID, numaNode string) NPUDevice {
+	return NPUDevice{
+		Info: rblndevice.Device{
+			Name:        name,
+			ProductName: "RBLN-CR03",
+			SID:         "sid-inherited-from-pf",
+			PCIBusID:    pciBusID,
+			PCINumaNode: numaNode,
+		},
+		ParentPFBusID: parentPFBusID,
+	}
+}
+
+func uniqueParentPFCount(devices map[string]NPUDevice, selected []string) int {
+	seen := make(map[string]struct{})
+	for _, deviceID := range selected {
+		seen[devices[deviceID].ParentPFBusID] = struct{}{}
+	}
+	return len(seen)
 }
 
 func assertSameSID(t *testing.T, devices map[string]NPUDevice, selected []string, expectedSID string) {

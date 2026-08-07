@@ -73,6 +73,7 @@ func newApp() *cli.App {
 		&cli.BoolFlag{
 			Name:        "use-generic-resource-name",
 			Usage:       "Expose devices as rebellions.ai/npu instead of legacy rebellions.ai/ATOM or rebellions.ai/REBEL resources.",
+			Value:       true,
 			Destination: &flags.useGenericResourceName,
 			EnvVars:     []string{"USE_GENERIC_RESOURCE_NAME"},
 		},
