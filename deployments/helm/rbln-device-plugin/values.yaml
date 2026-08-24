@@ -14,6 +14,12 @@ serviceAccount:
   annotations: {}
   name: ""
 
+logging:
+  # error|warning|info|debug — debug adds caller and per-request flow tracing
+  level: info
+  # json|text — production default is structured JSON on stdout
+  format: json
+
 devicePlugin:
   priorityClassName: system-node-critical
   updateStrategy:

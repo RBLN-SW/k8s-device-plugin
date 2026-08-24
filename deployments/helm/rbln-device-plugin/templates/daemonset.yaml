@@ -58,6 +58,12 @@ spec:
           value: {{ .Values.devicePlugin.useGenericResourceName | quote }}
         - name: HEALTHCHECK_PORT
           value: {{ .Values.devicePlugin.containers.plugin.healthcheckPort | quote }}
+        {{- /* Parenthesised access keeps rendering working when a parent chart
+               or values file drops the logging block entirely. */}}
+        - name: RBLN_DEVICE_PLUGIN_LOG_LEVEL
+          value: {{ (.Values.logging).level | default "info" | quote }}
+        - name: RBLN_DEVICE_PLUGIN_LOG_FORMAT
+          value: {{ (.Values.logging).format | default "json" | quote }}
         volumeMounts:
         - name: device-plugins
           mountPath: {{ .Values.devicePlugin.kubeletDevicePluginPath | quote }}
