@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	"k8s.io/klog/v2"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
@@ -18,6 +18,10 @@ const (
 	deviceStatusFault  = 3
 	deviceStatusFinish = 4
 )
+
+// deviceStatusUnreadable stands in for the status name when sysfs cannot be
+// read, so an unreadable device is still described by one stable token.
+const deviceStatusUnreadable = "UNREADABLE"
 
 var rebellionsSysfsClassPath = "/sys/class/rebellions"
 
@@ -55,21 +59,24 @@ func deviceStatusName(status int) string {
 	}
 }
 
-func healthForDevice(deviceName string) string {
+// healthForDevice deliberately does not log its outcome: it runs for every
+// device on every scan, so logging here would repeat the same line every scan
+// interval for as long as a device stays unhealthy. The manager reports health
+// as state *changes* instead (see ResourcePlugin.UpdateDevices).
+//
+// An unreadable status fails open (Healthy) so a transient sysfs error cannot
+// drain the node's allocatable devices; the read error itself is only
+// interesting while debugging.
+func healthForDevice(deviceName string) (health, statusName string) {
 	status, err := readDeviceStatus(deviceName)
 	if err != nil {
-		klog.ErrorS(err, "failed to read device status; assuming healthy", "device", deviceName)
-		return pluginapi.Healthy
+		slog.Debug("Failed to read device status; assuming healthy", "err", err, "device", deviceName)
+		return pluginapi.Healthy, deviceStatusUnreadable
 	}
 
 	if status == deviceStatusReady {
-		return pluginapi.Healthy
+		return pluginapi.Healthy, deviceStatusName(status)
 	}
 
-	klog.InfoS("device is not serviceable; reporting unhealthy",
-		"device", deviceName,
-		"status", status,
-		"statusName", deviceStatusName(status),
-	)
-	return pluginapi.Unhealthy
+	return pluginapi.Unhealthy, deviceStatusName(status)
 }

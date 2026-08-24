@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"k8s.io/klog/v2"
 )
 
 type Manager struct {
@@ -19,7 +19,7 @@ type Manager struct {
 	plugins map[string]*ResourcePlugin
 }
 
-func NewManager(ctx context.Context, config *Config) (*Manager, error) {
+func NewManager(config *Config) (*Manager, error) {
 	cdi, err := NewCDIHandler(config.flags.cdiRoot)
 	if err != nil {
 		return nil, err
@@ -28,7 +28,7 @@ func NewManager(ctx context.Context, config *Config) (*Manager, error) {
 		return nil, err
 	}
 
-	health, err := startHealthcheck(ctx, config.flags.healthcheckPort)
+	health, err := startHealthcheck(config.flags.healthcheckPort)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 	defer func() {
 		if err := kubeletWatcher.Close(); err != nil {
-			klog.ErrorS(err, "failed to close kubelet socket watcher")
+			slog.Warn("Failed to close kubelet socket watcher", "err", err)
 		}
 	}()
 
@@ -72,7 +72,7 @@ func (m *Manager) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-deviceTicker.C:
 			if err := m.reconcile(ctx); err != nil {
-				klog.ErrorS(err, "device reconciliation failed")
+				slog.Error("Device reconciliation failed", "err", err)
 			}
 		case event, ok := <-kubeletWatcher.Events:
 			if !ok {
@@ -82,7 +82,10 @@ func (m *Manager) Run(ctx context.Context) error {
 				continue
 			}
 
-			klog.InfoS("detected kubelet socket recreation; restarting device plugins", "event", event)
+			slog.Info("Detected kubelet socket recreation; restarting device plugins",
+				"path", event.Name,
+				"op", event.Op.String(),
+			)
 			if err := m.restart(ctx); err != nil {
 				return err
 			}
@@ -90,7 +93,7 @@ func (m *Manager) Run(ctx context.Context) error {
 			if !ok {
 				return fmt.Errorf("kubelet socket watcher closed unexpectedly")
 			}
-			klog.ErrorS(err, "kubelet socket watcher error")
+			slog.Error("Kubelet socket watcher error", "err", err)
 		}
 	}
 }
@@ -106,9 +109,10 @@ func (m *Manager) Stop() {
 
 	for resourceName, plugin := range m.plugins {
 		if err := plugin.Stop(); err != nil {
-			klog.ErrorS(err, "failed to stop device plugin", "resourceName", resourceName)
+			slog.Error("Failed to stop device plugin", "err", err, "resourceName", resourceName)
 		}
 	}
+	slog.Info("Stopped rbln-device-plugin", "resourceCount", len(m.plugins))
 	m.plugins = make(map[string]*ResourcePlugin)
 }
 
@@ -131,7 +135,12 @@ func (m *Manager) restart(ctx context.Context) error {
 }
 
 func (m *Manager) reconcile(ctx context.Context) error {
+	start := time.Now()
 	groups := discoverDeviceGroups(ctx, m.config.flags.useGenericResourceName)
+	discovered := 0
+	for _, group := range groups {
+		discovered += len(group.Devices)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -143,6 +152,7 @@ func (m *Manager) reconcile(ctx context.Context) error {
 				return fmt.Errorf("stop device plugin %s: %w", resourceName, err)
 			}
 			delete(m.plugins, resourceName)
+			slog.Info("Stopped device plugin for absent resource", "resourceName", resourceName)
 			continue
 		}
 		plugin.UpdateDevices(group.Devices)
@@ -153,10 +163,18 @@ func (m *Manager) reconcile(ctx context.Context) error {
 		socketPath := filepath.Join(m.config.flags.kubeletDevicePluginPath, socketNameForResource(resourceName))
 		plugin := NewResourcePlugin(resourceName, socketPath, m.config.KubeletSocketPath(), m.cdi, group.Devices)
 		if err := plugin.Start(ctx); err != nil {
-			return err
+			return fmt.Errorf("start device plugin %s: %w", resourceName, err)
 		}
 		m.plugins[resourceName] = plugin
 	}
+
+	// The info stream only reports change, so it cannot answer "is the scan loop
+	// still running, and how long does a scan take" — that is what this is for.
+	slog.Debug("Reconciled device inventory",
+		"resourceCount", len(m.plugins),
+		"deviceCount", discovered,
+		"durationMs", time.Since(start).Milliseconds(),
+	)
 
 	return nil
 }
