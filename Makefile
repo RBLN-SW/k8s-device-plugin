@@ -27,6 +27,12 @@ TARGETS := $(MAKE_TARGETS) $(CMD_TARGETS)
 
 GOOS ?= linux
 
+# An empty VERSION must not overwrite main.version's "dev" default with "":
+# the startup log record names the running build, and "" names nothing.
+ifneq ($(VERSION),)
+VERSION_LDFLAGS := -X main.version=$(VERSION)
+endif
+
 binaries: cmds
 ifneq ($(PREFIX),)
 cmd-%: COMMAND_BUILD_OPTIONS = -o $(PREFIX)/$(*)
@@ -34,7 +40,7 @@ endif
 cmds: $(CMD_TARGETS)
 $(CMD_TARGETS): cmd-%:
 	CGO_LDFLAGS_ALLOW='-Wl,--unresolved-symbols=ignore-in-object-files' GOOS=$(GOOS) \
-		go build -ldflags "-s -w -X main.version=$(VERSION)" $(COMMAND_BUILD_OPTIONS) $(MODULE)/cmd/$(*)
+		go build -ldflags "-s -w $(VERSION_LDFLAGS)" $(COMMAND_BUILD_OPTIONS) $(MODULE)/cmd/$(*)
 
 build:
 	GOOS=$(GOOS) go build ./...
