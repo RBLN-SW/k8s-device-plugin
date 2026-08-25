@@ -41,6 +41,7 @@ func (c Config) KubeletSocketPath() string {
 func main() {
 	logSettings := logging.SetupFromEnv()
 	bridgeGRPCLogs()
+	bridgeOTELLogs()
 	if err := newApp(logSettings).Run(os.Args); err != nil {
 		slog.Error("Command execution failed", "err", err)
 		os.Exit(1)

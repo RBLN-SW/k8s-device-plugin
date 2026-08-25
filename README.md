@@ -146,6 +146,13 @@ nothing new logs nothing:
   `Container allocation failed` (error) when a request is rejected. Both
   terminal records carry `durationMs`, because this handler is what stalls a pod
   in `ContainerCreating`.
+- **Tracing** — `Distributed tracing enabled` or
+  `Distributed tracing disabled; no OTLP endpoint configured` at startup,
+  `Tracing setup failed; continuing without distributed tracing` (warn) when the
+  exporter cannot be built, and `OpenTelemetry SDK error` (warn,
+  `component=otel`) while the collector is unreachable. Nothing tracing reports
+  rises above warn: it is best-effort, so none of it makes a device or an
+  allocation unusable.
 - **Degraded placement** — `Preferred allocation fallback to kubelet` (warn):
   allocation still succeeds, but topology-aware selection did not run, so the
   chosen devices may straddle NUMA nodes or PCI bridges.
@@ -157,7 +164,7 @@ nothing new logs nothing:
 Levels follow one rule: `error` means a device or request is unusable now,
 `warn` means the plugin handled something abnormal, `info` is lifecycle and
 state changes, and `debug` adds per-request flow (device list pushes, RSD group
-recreation, preferred allocation, and gRPC internals). Any record describing a
+recreation, preferred allocation, and gRPC / OpenTelemetry SDK internals). Any record describing a
 device is raised to `warn` when that device is unhealthy — including one that is
 already faulted the first time it is seen — so alerting on `warn` cannot miss
 unusable hardware.
