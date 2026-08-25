@@ -69,6 +69,32 @@ The binary can be configured with CLI flags or environment variables.
 | `--healthcheck-port` | `HEALTHCHECK_PORT` | `51515` | gRPC healthcheck port; set a negative value to disable it |
 | `--use-generic-resource-name` | `USE_GENERIC_RESOURCE_NAME` | `false` | Expose `rebellions.ai/npu` instead of per-product resources |
 | `--device-scan-interval` | `DEVICE_SCAN_INTERVAL` | `1m` | Polling interval for refreshing the device inventory |
+| `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | (empty) | OTLP gRPC endpoint to export allocation traces to; leave empty to disable tracing |
+
+## Observability
+
+The plugin can export NPU allocation traces via OpenTelemetry. When an OTLP
+gRPC endpoint is configured, each kubelet `Allocate` call produces an
+`Allocate` span with a child `allocateContainer` span per container, carrying
+the assigned NPU IDs, PCI bus IDs, and RSD group path. Spans are tagged with
+`service.name=rbln-device-plugin` and the node name (`k8s.node.name`).
+
+Tracing is disabled by default and is strictly best-effort: if the endpoint is
+empty, tracing is a no-op, and if exporter setup fails (e.g. a malformed
+endpoint), the plugin logs a warning and keeps running without tracing rather
+than aborting NPU scheduling on the node.
+
+With the Helm chart, set the endpoint via:
+
+```bash
+helm upgrade --install rbln-device-plugin \
+  ./deployments/helm/rbln-device-plugin \
+  -n rbln-device-plugin \
+  --set devicePlugin.otlpEndpoint=<collector-host>:4317
+```
+
+An endpoint given as `host:port` uses an insecure gRPC connection; pass a full
+URL (e.g. `https://collector:4317`) to use TLS.
 
 Logging is configured separately, through environment variables only — see
 [Logging](#logging).
@@ -120,6 +146,13 @@ nothing new logs nothing:
   `Container allocation failed` (error) when a request is rejected. Both
   terminal records carry `durationMs`, because this handler is what stalls a pod
   in `ContainerCreating`.
+- **Tracing** — `Distributed tracing enabled` or
+  `Distributed tracing disabled; no OTLP endpoint configured` at startup,
+  `Tracing setup failed; continuing without distributed tracing` (warn) when the
+  exporter cannot be built, and `OpenTelemetry SDK error` (warn,
+  `component=otel`) while the collector is unreachable. Nothing tracing reports
+  rises above warn: it is best-effort, so none of it makes a device or an
+  allocation unusable.
 - **Degraded placement** — `Preferred allocation fallback to kubelet` (warn):
   allocation still succeeds, but topology-aware selection did not run, so the
   chosen devices may straddle NUMA nodes or PCI bridges.
@@ -131,7 +164,7 @@ nothing new logs nothing:
 Levels follow one rule: `error` means a device or request is unusable now,
 `warn` means the plugin handled something abnormal, `info` is lifecycle and
 state changes, and `debug` adds per-request flow (device list pushes, RSD group
-recreation, preferred allocation, and gRPC internals). Any record describing a
+recreation, preferred allocation, and gRPC / OpenTelemetry SDK internals). Any record describing a
 device is raised to `warn` when that device is unhealthy — including one that is
 already faulted the first time it is seen — so alerting on `warn` cannot miss
 unusable hardware.

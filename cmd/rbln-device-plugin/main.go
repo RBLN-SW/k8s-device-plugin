@@ -25,6 +25,7 @@ type Flags struct {
 	healthcheckPort         int
 	useGenericResourceName  bool
 	deviceScanInterval      time.Duration
+	otlpEndpoint            string
 }
 
 type Config struct {
@@ -40,6 +41,7 @@ func (c Config) KubeletSocketPath() string {
 func main() {
 	logSettings := logging.SetupFromEnv()
 	bridgeGRPCLogs()
+	bridgeOTELLogs()
 	if err := newApp(logSettings).Run(os.Args); err != nil {
 		slog.Error("Command execution failed", "err", err)
 		os.Exit(1)
@@ -91,6 +93,12 @@ func newApp(logSettings logging.Settings) *cli.App {
 			Value:       time.Minute,
 			Destination: &flags.deviceScanInterval,
 			EnvVars:     []string{"DEVICE_SCAN_INTERVAL"},
+		},
+		&cli.StringFlag{
+			Name:        "otlp-endpoint",
+			Usage:       "OTLP gRPC endpoint (e.g. host:port) to export allocation traces to. Leave empty to disable tracing.",
+			Destination: &flags.otlpEndpoint,
+			EnvVars:     []string{"OTEL_EXPORTER_OTLP_ENDPOINT"},
 		},
 	}
 
@@ -145,6 +153,28 @@ func Run(ctx context.Context, config *Config) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	watchShutdownSignals(ctx, cancel)
+
+	shutdownTracing, err := initTracing(ctx, config.flags.otlpEndpoint, version)
+	if err != nil {
+		// Tracing is best-effort observability; a malformed endpoint or a
+		// failed exporter setup must not take down NPU scheduling on the node.
+		// Warn, not error: the plugin handled it and keeps scheduling NPUs —
+		// only the trace stream is missing.
+		slog.Warn("Tracing setup failed; continuing without distributed tracing",
+			"err", err,
+			"otlpEndpoint", config.flags.otlpEndpoint,
+		)
+		shutdownTracing = func(context.Context) error { return nil }
+	}
+	defer func() {
+		// ctx is already canceled once we get here, so flush on a fresh,
+		// bounded context to give buffered spans a chance to reach the backend.
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			slog.Warn("Failed to flush traces on shutdown", "err", err)
+		}
+	}()
 
 	manager, err := NewManager(config)
 	if err != nil {
