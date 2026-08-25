@@ -16,11 +16,16 @@ ARG GOLANG_VERSION=undefined
 ARG BASE_IMAGE=undefined
 FROM golang:${GOLANG_VERSION} AS build
 
+# The build stage needs VERSION too, not just the label below: it is what the
+# "Starting rbln-device-plugin" log record reports, and without it every
+# shipped image logs an empty version.
+ARG VERSION
+
 WORKDIR /build
 COPY . .
 
 RUN mkdir /artifacts
-RUN make PREFIX=/artifacts cmds
+RUN make PREFIX=/artifacts VERSION=${VERSION} cmds
 
 FROM ${BASE_IMAGE}
 

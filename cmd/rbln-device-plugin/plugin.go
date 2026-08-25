@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,7 +17,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
-	"k8s.io/klog/v2"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
@@ -33,6 +33,7 @@ type ResourcePlugin struct {
 	resourceName  string
 	socketPath    string
 	kubeletSocket string
+	log           *slog.Logger
 	cdi           *CDIHandler
 	rsdGroupFn    func([]string) (string, error)
 	devices       map[string]NPUDevice
@@ -48,11 +49,15 @@ func NewResourcePlugin(resourceName, socketPath, kubeletSocket string, cdi *CDIH
 		resourceName:  resourceName,
 		socketPath:    socketPath,
 		kubeletSocket: kubeletSocket,
-		cdi:           cdi,
-		rsdGroupFn:    rsdgroup.RecreateRsdGroup,
-		devices:       cloneDeviceMap(devices),
-		updateCh:      make(chan []*pluginapi.Device, 1),
-		stopCh:        make(chan struct{}),
+		// Bound once so every record of this plugin is attributable to its
+		// resource. Safe here because plugins are built after the process
+		// logger is installed, so this captures the configured handler.
+		log:        slog.With("resourceName", resourceName),
+		cdi:        cdi,
+		rsdGroupFn: rsdgroup.RecreateRsdGroup,
+		devices:    cloneDeviceMap(devices),
+		updateCh:   make(chan []*pluginapi.Device, 1),
+		stopCh:     make(chan struct{}),
 	}
 }
 
@@ -79,7 +84,7 @@ func (p *ResourcePlugin) Start(ctx context.Context) error {
 	go func() {
 		defer p.wg.Done()
 		if err := server.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
-			klog.ErrorS(err, "device plugin server terminated", "resourceName", p.resourceName, "socketPath", p.socketPath)
+			p.log.Error("Device plugin server terminated", "err", err, "socketPath", p.socketPath)
 		}
 	}()
 
@@ -115,9 +120,13 @@ func (p *ResourcePlugin) Stop() error {
 
 func (p *ResourcePlugin) UpdateDevices(devices map[string]NPUDevice) {
 	p.mu.Lock()
+	delta := diffDeviceInventories(p.devices, devices)
 	p.devices = cloneDeviceMap(devices)
 	current := clonePluginDevices(p.devices)
+	healthy, unhealthy := healthCounts(p.devices)
 	p.mu.Unlock()
+
+	p.logInventoryDelta(delta, healthy, unhealthy)
 
 	select {
 	case p.updateCh <- current:
@@ -130,14 +139,47 @@ func (p *ResourcePlugin) UpdateDevices(devices map[string]NPUDevice) {
 	}
 }
 
+// logInventoryDelta stays silent when a scan finds no change, and repeats the
+// resulting counts on every record it does emit, so a single line answers both
+// "what changed" and "what is allocatable now".
+func (p *ResourcePlugin) logInventoryDelta(delta deviceInventoryDelta, healthy, unhealthy int) {
+	if delta.isEmpty() {
+		return
+	}
+
+	ctx := context.Background()
+	log := p.log.With(
+		"deviceCount", healthy+unhealthy,
+		"healthyCount", healthy,
+		"unhealthyCount", unhealthy,
+	)
+
+	for _, device := range delta.Added {
+		log.Log(ctx, levelForHealth(device.Health), "Device appeared in inventory", deviceLogAttrs(device)...)
+	}
+	for _, id := range delta.Removed {
+		log.Warn("Device disappeared from inventory; it is no longer allocatable", "device", id)
+	}
+	for _, change := range delta.Changed {
+		log.Log(ctx, levelForHealth(change.Device.Health), "Device state changed",
+			append(deviceLogAttrs(change.Device),
+				"previousHealth", change.PreviousHealth,
+				"previousStatus", change.PreviousStatus,
+			)...,
+		)
+	}
+}
+
 func (p *ResourcePlugin) GetDevicePluginOptions(context.Context, *pluginapi.Empty) (*pluginapi.DevicePluginOptions, error) {
 	return preferredAllocationOptions(), nil
 }
 
 func (p *ResourcePlugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
-	if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: p.currentDevices()}); err != nil {
+	devices := p.currentDevices()
+	if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: devices}); err != nil {
 		return err
 	}
+	p.log.Debug("Sent initial device list to kubelet", "deviceCount", len(devices))
 
 	for {
 		select {
@@ -149,6 +191,7 @@ func (p *ResourcePlugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.Devic
 			if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: devices}); err != nil {
 				return err
 			}
+			p.log.Debug("Sent updated device list to kubelet", "deviceCount", len(devices))
 		}
 	}
 }
@@ -159,8 +202,16 @@ func (p *ResourcePlugin) Allocate(_ context.Context, request *pluginapi.Allocate
 	}
 
 	for _, containerRequest := range request.ContainerRequests {
+		start := time.Now()
 		containerResponse, err := p.allocateContainer(containerRequest.DevicesIds)
 		if err != nil {
+			// durationMs separates a rejected request from one that burned the
+			// kubelet's Allocate deadline waiting on a device node.
+			p.log.Error("Container allocation failed",
+				"err", err,
+				"deviceIDs", containerRequest.DevicesIds,
+				"durationMs", time.Since(start).Milliseconds(),
+			)
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		response.ContainerResponses = append(response.ContainerResponses, containerResponse)
@@ -181,8 +232,14 @@ func (p *ResourcePlugin) GetPreferredAllocation(_ context.Context, request *plug
 			int(containerRequest.AllocationSize),
 		)
 		if err != nil {
-			klog.InfoS("preferred allocation fallback to kubelet", "resourceName", p.resourceName, "error", err)
+			// Warn, not info: allocation still succeeds, but the devices
+			// kubelet picks may straddle NUMA nodes or PCI bridges, and that
+			// performance loss is otherwise silent. Request-driven, so the
+			// volume is bounded by pod churn rather than repeating on a timer.
+			p.log.Warn("Preferred allocation fallback to kubelet", "err", err, "allocationSize", containerRequest.AllocationSize)
 			deviceIDs = nil
+		} else {
+			p.log.Debug("Selected preferred allocation", "allocationSize", containerRequest.AllocationSize, "deviceIDs", deviceIDs)
 		}
 		response.ContainerResponses = append(response.ContainerResponses, &pluginapi.ContainerPreferredAllocationResponse{
 			DeviceIDs: deviceIDs,
@@ -214,9 +271,10 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 	}
 
 	sort.Strings(busIDs)
-	klog.InfoS(
-		"starting container allocation",
-		"resourceName", p.resourceName,
+	// Every durationMs below is measured from here, so one allocation's records
+	// read as a timeline: RSD group setup versus waiting for device nodes.
+	start := time.Now()
+	p.log.Info("Starting container allocation",
 		"deviceIDs", deviceIDs,
 		"busIDs", busIDs,
 	)
@@ -224,6 +282,11 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 	if err != nil {
 		return nil, fmt.Errorf("recreate RSD group for bus IDs %v: %w", busIDs, err)
 	}
+	p.log.Debug("Recreated RSD group",
+		"busIDs", busIDs,
+		"hostRsdPath", hostRsdPath,
+		"durationMs", time.Since(start).Milliseconds(),
+	)
 
 	deviceSpecs, err := deviceSpecsForDevices(selected, hostRsdPath)
 	if err != nil {
@@ -240,12 +303,13 @@ func (p *ResourcePlugin) allocateContainer(deviceIDs []string) (*pluginapi.Conta
 		Devices:     deviceSpecs,
 	}
 
-	klog.InfoS(
-		"completed container allocation",
-		"resourceName", p.resourceName,
+	// Without durationMs a pod stuck in ContainerCreating — the common
+	// device-plugin incident — shows up here only as "it eventually worked".
+	p.log.Info("Completed container allocation",
 		"deviceIDs", deviceIDs,
 		"busIDs", busIDs,
 		"hostRsdPath", hostRsdPath,
+		"durationMs", time.Since(start).Milliseconds(),
 	)
 
 	return response, nil
@@ -311,7 +375,7 @@ func (p *ResourcePlugin) register(ctx context.Context) error {
 	}
 	defer func() {
 		if err := conn.Close(); err != nil {
-			klog.ErrorS(err, "failed to close kubelet registration connection", "resourceName", p.resourceName, "socketPath", p.kubeletSocket)
+			p.log.Warn("Failed to close kubelet registration connection", "err", err, "kubeletSocket", p.kubeletSocket)
 		}
 	}()
 
@@ -328,24 +392,18 @@ func (p *ResourcePlugin) register(ctx context.Context) error {
 	}
 
 	deviceIDs := sortedDeviceIDs(p.devices)
-	klog.InfoS("registered device plugin",
-		"resourceName", p.resourceName,
+	healthy, unhealthy := healthCounts(p.devices)
+	// No deviceIDs list here: each device gets its own record below, and
+	// repeating the whole set turns one record into a second copy of them.
+	p.log.Info("Registered device plugin with kubelet",
 		"deviceCount", len(p.devices),
-		"deviceIDs", deviceIDs,
+		"healthyCount", healthy,
+		"unhealthyCount", unhealthy,
 		"socketPath", p.socketPath,
 	)
 	for _, id := range deviceIDs {
 		device := p.devices[id]
-		info := device.Info
-		klog.InfoS("device exposed",
-			"resourceName", p.resourceName,
-			"name", info.Name,
-			"pciDeviceID", info.PCIDeviceID,
-			"pciBusID", info.PCIBusID,
-			"product", info.ProductName,
-			"numa", info.PCINumaNode,
-			"health", device.Health,
-		)
+		p.log.Log(context.Background(), levelForHealth(device.Health), "Device exposed", deviceLogAttrs(device)...)
 	}
 	return nil
 }
@@ -360,8 +418,9 @@ func cloneDeviceMap(devices map[string]NPUDevice) map[string]NPUDevice {
 	cloned := make(map[string]NPUDevice, len(devices))
 	for id, device := range devices {
 		cloned[id] = NPUDevice{
-			Info:   device.Info,
-			Health: device.Health,
+			Info:       device.Info,
+			Health:     device.Health,
+			StatusName: device.StatusName,
 		}
 	}
 	return cloned

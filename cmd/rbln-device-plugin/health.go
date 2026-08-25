@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"sync"
@@ -12,7 +14,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
-	"k8s.io/klog/v2"
 )
 
 type healthServer struct {
@@ -24,7 +25,7 @@ type healthServer struct {
 	serving  atomic.Bool
 }
 
-func startHealthcheck(ctx context.Context, port int) (*healthServer, error) {
+func startHealthcheck(port int) (*healthServer, error) {
 	if port < 0 {
 		return nil, nil
 	}
@@ -45,9 +46,9 @@ func startHealthcheck(ctx context.Context, port int) (*healthServer, error) {
 	health.wg.Add(1)
 	go func() {
 		defer health.wg.Done()
-		klog.FromContext(ctx).Info("starting healthcheck service", "addr", listener.Addr().String())
-		if err := server.Serve(listener); err != nil {
-			klog.ErrorS(err, "healthcheck service terminated")
+		slog.Info("Started healthcheck service", "addr", listener.Addr().String())
+		if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			slog.Error("Healthcheck service terminated", "err", err)
 		}
 	}()
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,14 +14,12 @@ import (
 	"github.com/urfave/cli/v2"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 
-	"github.com/RBLN-SW/k8s-device-plugin/pkg/flags"
+	"github.com/RBLN-SW/k8s-device-plugin/pkg/logging"
 )
 
 var version = "dev"
 
 type Flags struct {
-	loggingConfig *flags.LoggingConfig
-
 	cdiRoot                 string
 	kubeletDevicePluginPath string
 	healthcheckPort         int
@@ -30,6 +29,8 @@ type Flags struct {
 
 type Config struct {
 	flags *Flags
+	// Reported in the startup record so the stream states its own gate.
+	logging logging.Settings
 }
 
 func (c Config) KubeletSocketPath() string {
@@ -37,16 +38,24 @@ func (c Config) KubeletSocketPath() string {
 }
 
 func main() {
-	if err := newApp().Run(os.Args); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	logSettings := logging.SetupFromEnv()
+	bridgeGRPCLogs()
+	if err := newApp(logSettings).Run(os.Args); err != nil {
+		slog.Error("Command execution failed", "err", err)
 		os.Exit(1)
 	}
 }
 
-func newApp() *cli.App {
-	flags := &Flags{
-		loggingConfig: flags.NewLoggingConfig(),
-	}
+// Drop cli's "-v" alias for --version: klog's "-v 2" would otherwise parse as
+// "print the version" and exit 0, so a DaemonSet with wrong args would look
+// like it succeeded. Undefined, "-v" is a usage error instead. This must be an
+// init: cli reads the global while building every App.
+func init() {
+	cli.VersionFlag = &cli.BoolFlag{Name: "version", Usage: "print the version"}
+}
+
+func newApp(logSettings logging.Settings) *cli.App {
+	flags := &Flags{}
 
 	cliFlags := []cli.Flag{
 		&cli.StringFlag{
@@ -84,12 +93,17 @@ func newApp() *cli.App {
 			EnvVars:     []string{"DEVICE_SCAN_INTERVAL"},
 		},
 	}
-	cliFlags = append(cliFlags, flags.loggingConfig.Flags()...)
 
 	app := &cli.App{
-		Name:            "rbln-device-plugin",
-		Version:         version,
-		Usage:           "rbln-device-plugin exposes Rebellions NPUs through the Kubernetes device plugin API.",
+		Name:    "rbln-device-plugin",
+		Version: version,
+		Usage:   "rbln-device-plugin exposes Rebellions NPUs through the Kubernetes device plugin API.",
+		// stdout is the log stream, so usage output goes to stderr: on a flag
+		// error cli prints "Incorrect Usage" plus the whole help text through
+		// Writer, which on stdout is a dozen unparseable lines interleaved with
+		// the records a collector is reading.
+		Writer:          os.Stderr,
+		ErrWriter:       os.Stderr,
 		ArgsUsage:       " ",
 		HideHelpCommand: true,
 		Flags:           cliFlags,
@@ -97,10 +111,10 @@ func newApp() *cli.App {
 			if c.Args().Len() > 0 {
 				return fmt.Errorf("arguments not supported: %v", c.Args().Slice())
 			}
-			return flags.loggingConfig.Apply()
+			return nil
 		},
 		Action: func(c *cli.Context) error {
-			return Run(c.Context, &Config{flags: flags})
+			return Run(c.Context, &Config{flags: flags, logging: logSettings})
 		},
 	}
 
@@ -108,6 +122,19 @@ func newApp() *cli.App {
 }
 
 func Run(ctx context.Context, config *Config) error {
+	// The first record of the stream: which build is running, with which
+	// configuration. Everything after it is interpreted against this line.
+	slog.Info("Starting rbln-device-plugin",
+		"version", version,
+		"logLevel", config.logging.Level,
+		"logFormat", config.logging.Format,
+		"cdiRoot", config.flags.cdiRoot,
+		"kubeletDevicePluginPath", config.flags.kubeletDevicePluginPath,
+		"healthcheckPort", config.flags.healthcheckPort,
+		"useGenericResourceName", config.flags.useGenericResourceName,
+		"deviceScanInterval", config.flags.deviceScanInterval.String(),
+	)
+
 	if err := os.MkdirAll(config.flags.kubeletDevicePluginPath, 0o755); err != nil {
 		return err
 	}
@@ -115,10 +142,11 @@ func Run(ctx context.Context, config *Config) error {
 		return err
 	}
 
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	watchShutdownSignals(ctx, cancel)
 
-	manager, err := NewManager(ctx, config)
+	manager, err := NewManager(config)
 	if err != nil {
 		return err
 	}
@@ -129,4 +157,24 @@ func Run(ctx context.Context, config *Config) error {
 	}
 
 	return nil
+}
+
+// watchShutdownSignals names the signal that ended the process, because
+// "why did this pod restart" reads differently for a SIGTERM (kubelet draining
+// or rolling the DaemonSet) than for a SIGQUIT, and nothing else records the
+// distinction. A ctx cancelled elsewhere is a shutdown but not a signal, so it
+// deliberately logs nothing here.
+func watchShutdownSignals(ctx context.Context, cancel context.CancelFunc) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	go func() {
+		defer signal.Stop(signals)
+		select {
+		case sig := <-signals:
+			slog.Info("Shutdown signal received", "signal", sig.String())
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 }
