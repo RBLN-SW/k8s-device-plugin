@@ -13,6 +13,7 @@ permissions:
   contents: read
   pull-requests: write
   statuses: write
+  security-events: write # image-scan.yaml uploads SARIF to code scanning
 
 jobs:
   pr-title-validation:
@@ -51,3 +52,9 @@ jobs:
   unit-tests:
     needs: pr-title-validation
     uses: ./.github/workflows/go-tests.yaml
+  image-scan:
+    needs: [lint, manifests-check, unit-tests]
+    uses: ./.github/workflows/image-scan.yaml
+    secrets: inherit
+    with:
+      fail-on-findings: true
