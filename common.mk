@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-GOLANG_VERSION ?= 1.25.7
+# Keep in sync with go.mod's toolchain directive: this is the Go that builds the
+# shipped binary, so its stdlib is what the image scan reports.
+GOLANG_VERSION ?= 1.26.7
+
+# Read by .github/workflows/image-scan.yaml so CI and `make scan-image` agree.
+TRIVY_VERSION ?= v0.74.0
 
 MODULE := github.com/RBLN-SW/k8s-device-plugin
 

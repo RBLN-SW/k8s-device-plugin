@@ -31,7 +31,7 @@ IMAGE_TAG := $(VERSION)
 IMAGE = $(IMAGE_NAME):$(IMAGE_TAG)
 
 ##### Public rules #####
-.PHONY: $(DISTRIBUTIONS) build
+.PHONY: $(DISTRIBUTIONS) build scan-image
 
 build: ubuntu22.04
 
@@ -49,4 +49,14 @@ $(DISTRIBUTIONS):
 		--build-arg VERSION="$(VERSION)" \
 		-f $(DOCKERFILE) \
 		$(CURDIR)
+
+# Same filter as .github/workflows/image-scan.yaml, so a green run here means a
+# green gate on the PR.
+scan-image: build
+	@command -v trivy >/dev/null || { \
+		echo "trivy not found: https://trivy.dev/latest/getting-started/installation/"; \
+		exit 1; \
+	}
+	trivy image --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
+		--ignorefile $(CURDIR)/.trivyignore.yaml --exit-code 1 $(IMAGE)
 
