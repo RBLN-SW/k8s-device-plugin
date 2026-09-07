@@ -231,7 +231,7 @@ func (p *ResourcePlugin) Allocate(ctx context.Context, request *pluginapi.Alloca
 				return nil, status.Errorf(codes.Internal, "create RDS CDI annotations: %v", err)
 			}
 			containerResponse.Annotations = annotations
-			klog.InfoS("added rds CDI annotations")
+			p.log.Debug("Added RDS CDI annotations")
 		}
 		response.ContainerResponses = append(response.ContainerResponses, containerResponse)
 	}
@@ -368,7 +368,7 @@ func rdsDevicePresent() bool {
 		return false
 	}
 
-	klog.InfoS("found rds device nodes", "paths", found)
+	slog.Debug("Found RDS device nodes", "paths", found)
 	return true
 }
 
