@@ -27,6 +27,7 @@ const (
 	deviceNodePollTimeout  = 5 * time.Second
 	deviceNodePollInterval = 100 * time.Millisecond
 	registerTimeout        = 10 * time.Second
+	rdsDeviceGlob          = "/dev/rblnfs*"
 )
 
 type ResourcePlugin struct {
@@ -224,6 +225,14 @@ func (p *ResourcePlugin) Allocate(ctx context.Context, request *pluginapi.Alloca
 			)
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
+		if rdsDevicePresent() {
+			annotations, err := p.cdi.RDSAnnotations(containerResponse.Annotations)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "create RDS CDI annotations: %v", err)
+			}
+			containerResponse.Annotations = annotations
+			klog.InfoS("added rds CDI annotations")
+		}
 		response.ContainerResponses = append(response.ContainerResponses, containerResponse)
 	}
 
@@ -340,6 +349,27 @@ func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []stri
 	)
 
 	return response, nil
+}
+
+func rdsDevicePresent() bool {
+	paths, err := filepath.Glob(rdsDeviceGlob)
+	if err != nil {
+		return false
+	}
+	found := make([]string, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err == nil && !info.IsDir() {
+			found = append(found, path)
+		}
+	}
+
+	if len(found) == 0 {
+		return false
+	}
+
+	klog.InfoS("found rds device nodes", "paths", found)
+	return true
 }
 
 func (p *ResourcePlugin) selectedDevices(deviceIDs []string) ([]NPUDevice, error) {
