@@ -11,6 +11,7 @@ import (
 )
 
 func TestSelectPreferredDeviceIDsPrefersSingleSID(t *testing.T) {
+	withoutPCITopology(t)
 	plugin := testPluginWithDevices(map[string]NPUDevice{
 		"rbln0": testDevice("rbln0", "sid-a", "0000:06:00.0", "0"),
 		"rbln1": testDevice("rbln1", "sid-a", "0000:06:00.1", "0"),
@@ -38,6 +39,7 @@ func TestSelectPreferredDeviceIDsPrefersSingleSID(t *testing.T) {
 }
 
 func TestSelectPreferredDeviceIDsWorksWithoutTopology(t *testing.T) {
+	withoutPCITopology(t)
 	plugin := testPluginWithDevices(map[string]NPUDevice{
 		"rbln0": testDevice("rbln0", "sid-a", "0000:06:00.0", ""),
 		"rbln1": testDevice("rbln1", "sid-a", "0000:06:00.1", ""),
@@ -62,6 +64,7 @@ func TestSelectPreferredDeviceIDsWorksWithoutTopology(t *testing.T) {
 }
 
 func TestSelectPreferredDeviceIDsFillsExistingSIDBeforeOpeningAnother(t *testing.T) {
+	withoutPCITopology(t)
 	plugin := testPluginWithDevices(map[string]NPUDevice{
 		"rbln0":  testDevice("rbln0", "sid-a", "0000:06:00.0", ""),
 		"rbln1":  testDevice("rbln1", "sid-a", "0000:06:00.1", ""),
@@ -97,7 +100,8 @@ func TestSelectPreferredDeviceIDsFillsExistingSIDBeforeOpeningAnother(t *testing
 	}
 }
 
-func TestSelectPreferredDeviceIDsUsesNUMAToBreakSIDTie(t *testing.T) {
+func TestSelectPreferredDeviceIDsKeepsCardsOnOneNUMA(t *testing.T) {
+	withoutPCITopology(t)
 	plugin := testPluginWithDevices(map[string]NPUDevice{
 		"rbln0":  testDevice("rbln0", "sid-a", "0000:06:00.0", "0"),
 		"rbln1":  testDevice("rbln1", "sid-a", "0000:06:00.1", "0"),
@@ -130,7 +134,7 @@ func TestSelectPreferredDeviceIDsUsesNUMAToBreakSIDTie(t *testing.T) {
 		t.Fatalf("expected 2 SID groups, got %d in %v", got, selected)
 	}
 	if got := uniqueNUMACount(plugin.devices, selected); got != 1 {
-		t.Fatalf("expected one NUMA node after SID tie-break, got %d in %v", got, selected)
+		t.Fatalf("expected one NUMA node, got %d in %v", got, selected)
 	}
 	if got := countSID(plugin.devices, selected, "sid-a"); got != 4 {
 		t.Fatalf("expected sid-a to be selected, got %v", selected)
@@ -177,6 +181,14 @@ func TestGetPreferredAllocationAndOptions(t *testing.T) {
 
 func testPluginWithDevices(devices map[string]NPUDevice) *ResourcePlugin {
 	return NewResourcePlugin("rebellions.ai/ATOM", filepath.Join(os.TempDir(), "rbln-test.sock"), filepath.Join(os.TempDir(), "kubelet.sock"), nil, devices)
+}
+
+// SID/NUMA tests must not accidentally use a test runner's physical PCI tree.
+func withoutPCITopology(t *testing.T) {
+	t.Helper()
+	previous := topologyPCISysfsDevicesPath
+	topologyPCISysfsDevicesPath = t.TempDir()
+	t.Cleanup(func() { topologyPCISysfsDevicesPath = previous })
 }
 
 func testDevice(name, sid, pciBusID, numaNode string) NPUDevice {

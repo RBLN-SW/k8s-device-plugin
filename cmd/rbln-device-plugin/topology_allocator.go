@@ -2,58 +2,48 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
 
-const (
-	ca25BridgeIndex = 2
-	ca22BridgeIndex = 1
-)
-
-var (
-	topologyPCISysfsDevicesPath = "/sys/bus/pci/devices"
-	topologyPCIAddressPattern   = regexp.MustCompile(`^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$`)
-)
+type allocationDevice struct {
+	id     string
+	sid    int
+	numa   int // -1 means unknown; otherwise an index into numaCounts.
+	hasPCI bool
+}
 
 type topologyAllocator struct {
-	groups        []deviceGroup
-	groupsByID    map[string]deviceGroup
-	deviceToGroup map[string]string
+	devices   []allocationDevice
+	byID      map[string]int
+	pairs     [][]pciDistance
+	tree      *pciTree
+	sidCount  int
+	numaCount int
 }
 
-type deviceGroup struct {
-	id        string
-	devices   []string
-	hasNUMA   bool
-	numa      int
-	hasBridge bool
-	bridge    string
+// NUMA locality precedes shared-card packing; PCI paths refine that placement.
+// Unknown metadata is never evidence of a local or zero-hop link.
+type allocationScore struct {
+	unknownNUMA, numaNodes, sidGroups int
+	unknownPCI, separateRoots         int
+	maxDistance, totalDistance        int
 }
 
-type groupChoice struct {
-	devices    []string
-	groups     []deviceGroup
-	newGroups  int
-	fullGroups int
-	leftover   int
+func (s allocationScore) less(other allocationScore) bool {
+	return slices.Compare(s.values(), other.values()) < 0
+}
+
+func (s allocationScore) values() []int {
+	return []int{s.unknownNUMA, s.numaNodes, s.sidGroups, s.unknownPCI,
+		s.separateRoots, s.maxDistance, s.totalDistance}
 }
 
 func (p *ResourcePlugin) selectPreferredDeviceIDs(availableDeviceIDs, mustIncludeDeviceIDs []string, allocationSize int) ([]string, error) {
 	if allocationSize < 0 {
 		return nil, fmt.Errorf("allocation size must be non-negative")
 	}
-	if allocationSize == 0 {
-		return []string{}, nil
-	}
-	if len(availableDeviceIDs) == 0 {
-		return nil, fmt.Errorf("preferred allocation request does not include any available device IDs")
-	}
-
 	availableDevices, err := p.availableDevices(availableDeviceIDs)
 	if err != nil {
 		return nil, err
@@ -64,8 +54,20 @@ func (p *ResourcePlugin) selectPreferredDeviceIDs(availableDeviceIDs, mustInclud
 	if err := validateMustInclude(availableDevices, mustIncludeDeviceIDs, allocationSize); err != nil {
 		return nil, err
 	}
-
-	selected := newTopologyAllocator(availableDevices).SelectDevices(mustIncludeDeviceIDs, allocationSize)
+	selected, excluded := normalizeMustInclude(mustIncludeDeviceIDs)
+	if len(selected) == allocationSize {
+		return selected, nil
+	}
+	// No placement decision, and therefore no sysfs reads, when all are needed.
+	if allocationSize == len(availableDevices) {
+		for _, id := range sortedDeviceIDs(availableDevices) {
+			if _, used := excluded[id]; !used {
+				selected = append(selected, id)
+			}
+		}
+		return selected, nil
+	}
+	selected = newTopologyAllocator(availableDevices).SelectDevices(mustIncludeDeviceIDs, allocationSize)
 	if len(selected) != allocationSize {
 		return nil, fmt.Errorf("selected %d devices for a request of %d", len(selected), allocationSize)
 	}
@@ -73,226 +75,244 @@ func (p *ResourcePlugin) selectPreferredDeviceIDs(availableDeviceIDs, mustInclud
 }
 
 func newTopologyAllocator(devices map[string]NPUDevice) *topologyAllocator {
-	groupMap := make(map[string]*deviceGroup)
-	deviceToGroup := make(map[string]string, len(devices))
-
-	for _, deviceID := range sortedDeviceIDs(devices) {
-		device := devices[deviceID]
-		groupID := device.Info.SID
-		if groupID == "" {
-			groupID = deviceID
+	tree := newPCITree(devices)
+	allocator := &topologyAllocator{byID: make(map[string]int, len(devices)), tree: tree}
+	sids := make(map[string]int)
+	numas := make(map[int]int)
+	for _, id := range sortedDeviceIDs(devices) {
+		info := devices[id].Info
+		sidKey := "sid:" + strings.TrimSpace(info.SID)
+		if !knownSID(info.SID) {
+			sidKey = "device:" + id
 		}
-
-		group := groupMap[groupID]
-		if group == nil {
-			group = &deviceGroup{id: groupID}
-			if numa, err := strconv.Atoi(device.Info.PCINumaNode); err == nil && numa >= 0 {
-				group.hasNUMA = true
-				group.numa = numa
-			}
-			if bridgeIndex, ok := bridgeIndexForDevice(device); ok && device.Info.PCIBusID != "" {
-				if bridge, err := getPCIBridge(device.Info.PCIBusID, bridgeIndex); err == nil {
-					group.hasBridge = true
-					group.bridge = bridge
-				}
-			}
-			groupMap[groupID] = group
+		if _, exists := sids[sidKey]; !exists {
+			sids[sidKey] = len(sids)
 		}
-
-		group.devices = append(group.devices, deviceID)
-		deviceToGroup[deviceID] = groupID
+		numaIndex := -1
+		if numa, err := strconv.Atoi(strings.TrimSpace(info.PCINumaNode)); err == nil && numa >= 0 {
+			if _, exists := numas[numa]; !exists {
+				numas[numa] = len(numas)
+			}
+			numaIndex = numas[numa]
+		}
+		allocator.byID[id] = len(allocator.devices)
+		allocator.devices = append(allocator.devices, allocationDevice{
+			id: id, sid: sids[sidKey], numa: numaIndex, hasPCI: tree.devices[id] != nil,
+		})
 	}
-
-	groupIDs := make([]string, 0, len(groupMap))
-	groupsByID := make(map[string]deviceGroup, len(groupMap))
-	for groupID := range groupMap {
-		groupIDs = append(groupIDs, groupID)
+	allocator.sidCount, allocator.numaCount = len(sids), len(numas)
+	allocator.pairs = make([][]pciDistance, len(allocator.devices))
+	for i, src := range allocator.devices {
+		allocator.pairs[i] = make([]pciDistance, len(allocator.devices))
+		for j, dst := range allocator.devices {
+			allocator.pairs[i][j] = tree.distance(src.id, dst.id)
+		}
 	}
-	sort.Strings(groupIDs)
-
-	groups := make([]deviceGroup, 0, len(groupIDs))
-	for _, groupID := range groupIDs {
-		group := *groupMap[groupID]
-		groups = append(groups, group)
-		groupsByID[groupID] = group
-	}
-
-	return &topologyAllocator{
-		groups:        groups,
-		groupsByID:    groupsByID,
-		deviceToGroup: deviceToGroup,
-	}
+	return allocator
 }
 
+func knownSID(sid string) bool {
+	sid = strings.ToLower(strings.TrimSpace(sid))
+	if sid == "" || sid == "n/a" || sid == "unknown" {
+		return false
+	}
+	// SMI can supply a zero-filled serial when the identity is unavailable.
+	return strings.Trim(strings.TrimPrefix(sid, "0x"), "0") != ""
+}
+
+// SelectDevices searches combinations, including subsets within one SID.
+// Bounds only prune choices that cannot improve the best score: this is exact
+// for the documented score rather than greedy nearest-neighbor selection.
 func (a *topologyAllocator) SelectDevices(mustIncludeDeviceIDs []string, allocationSize int) []string {
 	selected, excluded := normalizeMustInclude(mustIncludeDeviceIDs)
 	remaining := allocationSize - len(selected)
 	if remaining <= 0 {
 		return selected
 	}
-
-	baseGroupIDs := make(map[string]struct{}, len(selected))
-	baseGroups := make([]deviceGroup, 0, len(selected))
-	for _, deviceID := range selected {
-		groupID, ok := a.deviceToGroup[deviceID]
-		if !ok {
-			continue
-		}
-		if _, exists := baseGroupIDs[groupID]; exists {
-			continue
-		}
-		baseGroupIDs[groupID] = struct{}{}
-		baseGroups = append(baseGroups, a.groupsByID[groupID])
+	s := allocationSearch{allocator: a, sidCounts: make([]int, a.sidCount), numaCounts: make([]int, a.numaCount)}
+	for _, id := range selected {
+		s.add(a.byID[id])
 	}
-
-	candidates := make([]deviceGroup, 0, len(a.groups))
-	for _, group := range a.groups {
-		freeDevices := make([]string, 0, len(group.devices))
-		for _, deviceID := range group.devices {
-			if _, used := excluded[deviceID]; !used {
-				freeDevices = append(freeDevices, deviceID)
-			}
-		}
-		if len(freeDevices) == 0 {
-			continue
-		}
-		group.devices = freeDevices
-		candidates = append(candidates, group)
-	}
-
-	var best *groupChoice
-	var dfs func(int, []deviceGroup)
-	dfs = func(start int, chosen []deviceGroup) {
-		if len(chosen) > 0 {
-			if choice := buildChoice(chosen, remaining, baseGroupIDs); betterChoice(choice, best, baseGroups) {
-				best = choice
-			}
-		}
-		for i := start; i < len(candidates); i++ {
-			chosen = append(chosen, candidates[i])
-			dfs(i+1, chosen)
-			chosen = chosen[:len(chosen)-1]
+	for i, device := range a.devices {
+		if _, used := excluded[device.id]; !used {
+			s.candidates = append(s.candidates, i)
 		}
 	}
-	dfs(0, nil)
-
-	if best == nil {
-		return selected
+	s.prepareBounds()
+	s.search(0, remaining)
+	result := make([]string, 0, len(s.best))
+	for _, index := range s.best {
+		result = append(result, a.devices[index].id)
 	}
-	return append(selected, best.devices...)
+	return result
 }
 
-func buildChoice(chosen []deviceGroup, remaining int, baseGroupIDs map[string]struct{}) *groupChoice {
-	total := 0
-	groups := append([]deviceGroup(nil), chosen...)
-	for _, group := range groups {
-		total += len(group.devices)
-	}
-	if total < remaining {
-		return nil
-	}
-
-	sort.Slice(groups, func(i, j int) bool {
-		if len(groups[i].devices) != len(groups[j].devices) {
-			return len(groups[i].devices) > len(groups[j].devices)
-		}
-		return groups[i].id < groups[j].id
-	})
-
-	choice := &groupChoice{}
-	left := remaining
-	for i, group := range groups {
-		if len(group.devices) <= left {
-			choice.devices = append(choice.devices, group.devices...)
-			choice.groups = append(choice.groups, group)
-			if _, exists := baseGroupIDs[group.id]; !exists {
-				choice.newGroups++
-			}
-			choice.fullGroups++
-			left -= len(group.devices)
-			continue
-		}
-
-		partial := group
-		for j := i + 1; j < len(groups); j++ {
-			if size := len(groups[j].devices); size >= left && size < len(partial.devices) {
-				partial = groups[j]
-			}
-		}
-		choice.devices = append(choice.devices, partial.devices[:left]...)
-		choice.groups = append(choice.groups, partial)
-		if _, exists := baseGroupIDs[partial.id]; !exists {
-			choice.newGroups++
-		}
-		choice.leftover = len(partial.devices) - left
-		left = 0
-		break
-	}
-
-	if left > 0 {
-		return nil
-	}
-	return choice
+type allocationSearch struct {
+	allocator                       *topologyAllocator
+	candidates, chosen, best        []int
+	sidCounts, numaCounts           []int
+	score, bestScore                allocationScore
+	suffixSID                       [][]int
+	suffixKnownNUMA, suffixKnownPCI []int
+	minDistance, minSeparateRoots   int
 }
 
-func betterChoice(candidate, current *groupChoice, baseGroups []deviceGroup) bool {
-	if candidate == nil {
-		return false
+func (s *allocationSearch) add(index int) {
+	device := s.allocator.devices[index]
+	if s.sidCounts[device.sid] == 0 {
+		s.score.sidGroups++
 	}
-	if current == nil {
-		return true
+	s.sidCounts[device.sid]++
+	if device.numa < 0 {
+		s.score.unknownNUMA++
+	} else {
+		if s.numaCounts[device.numa] == 0 {
+			s.score.numaNodes++
+		}
+		s.numaCounts[device.numa]++
 	}
-	if candidate.newGroups != current.newGroups {
-		return candidate.newGroups < current.newGroups
+	if !device.hasPCI {
+		s.score.unknownPCI++
 	}
-	if candidate.fullGroups != current.fullGroups {
-		return candidate.fullGroups > current.fullGroups
+	for _, other := range s.chosen {
+		pair := s.allocator.pairs[index][other]
+		if pair.separateRoots {
+			s.score.separateRoots++
+		}
+		if pair.known {
+			s.score.maxDistance = max(s.score.maxDistance, pair.hops)
+			s.score.totalDistance += pair.hops
+		}
 	}
-	if candidate.leftover != current.leftover {
-		return candidate.leftover < current.leftover
-	}
-
-	cUnknownNUMA, cUniqueNUMA, cUnknownBridge, cUniqueBridge := topologyMetrics(baseGroups, candidate.groups)
-	bUnknownNUMA, bUniqueNUMA, bUnknownBridge, bUniqueBridge := topologyMetrics(baseGroups, current.groups)
-	if cUnknownNUMA != bUnknownNUMA {
-		return cUnknownNUMA < bUnknownNUMA
-	}
-	if cUniqueNUMA != bUniqueNUMA {
-		return cUniqueNUMA < bUniqueNUMA
-	}
-	if cUnknownBridge != bUnknownBridge {
-		return cUnknownBridge < bUnknownBridge
-	}
-	if cUniqueBridge != bUniqueBridge {
-		return cUniqueBridge < bUniqueBridge
-	}
-
-	return strings.Join(candidate.devices, ",") < strings.Join(current.devices, ",")
+	s.chosen = append(s.chosen, index)
 }
 
-func topologyMetrics(baseGroups, chosenGroups []deviceGroup) (unknownNUMA, uniqueNUMA, unknownBridge, uniqueBridge int) {
-	numas := make(map[int]struct{})
-	bridges := make(map[string]struct{})
-	seen := make(map[string]struct{})
+func (s *allocationSearch) search(start, remaining int) {
+	if remaining == 0 {
+		if s.best == nil || s.score.less(s.bestScore) {
+			s.best = append(s.best[:0], s.chosen...)
+			s.bestScore = s.score
+		}
+		return
+	}
+	if len(s.candidates)-start < remaining {
+		return
+	}
+	if s.best != nil && !s.lowerBound(start, remaining).less(s.bestScore) {
+		return
+	}
+	// Sorted IDs make the first equal-score result the lexicographic winner,
+	// independent of map or kubelet candidate order.
+	for i := start; i <= len(s.candidates)-remaining; i++ {
+		index := s.candidates[i]
+		previous := s.score
+		s.add(index)
+		s.search(i+1, remaining-1)
+		s.chosen = s.chosen[:len(s.chosen)-1]
+		device := s.allocator.devices[index]
+		s.sidCounts[device.sid]--
+		if device.numa >= 0 {
+			s.numaCounts[device.numa]--
+		}
+		s.score = previous
+	}
+}
 
-	for _, group := range append(append([]deviceGroup(nil), baseGroups...), chosenGroups...) {
-		if _, exists := seen[group.id]; exists {
-			continue
+func (s *allocationSearch) prepareBounds() {
+	n := len(s.candidates)
+	s.suffixSID = make([][]int, n+1)
+	s.suffixSID[n] = make([]int, len(s.sidCounts))
+	s.suffixKnownNUMA = make([]int, n+1)
+	s.suffixKnownPCI = make([]int, n+1)
+	for i := n - 1; i >= 0; i-- {
+		device := s.allocator.devices[s.candidates[i]]
+		s.suffixSID[i] = slices.Clone(s.suffixSID[i+1])
+		s.suffixSID[i][device.sid]++
+		s.suffixKnownNUMA[i] = s.suffixKnownNUMA[i+1]
+		if device.numa >= 0 {
+			s.suffixKnownNUMA[i]++
 		}
-		seen[group.id] = struct{}{}
-		if group.hasNUMA {
-			numas[group.numa] = struct{}{}
-		} else {
-			unknownNUMA++
-		}
-		if group.hasBridge {
-			bridges[group.bridge] = struct{}{}
-		} else {
-			unknownBridge++
+		s.suffixKnownPCI[i] = s.suffixKnownPCI[i+1]
+		if device.hasPCI {
+			s.suffixKnownPCI[i]++
 		}
 	}
+	s.minDistance = int(^uint(0) >> 1)
+	s.minSeparateRoots = 1
+	for i := range s.allocator.devices {
+		for j := 0; j < i; j++ {
+			pair := s.allocator.pairs[i][j]
+			if pair.known {
+				s.minDistance = min(s.minDistance, pair.hops)
+			}
+			if !pair.separateRoots {
+				s.minSeparateRoots = 0
+			}
+		}
+	}
+	if s.minDistance == int(^uint(0)>>1) {
+		s.minDistance = 0
+	}
+}
 
-	return unknownNUMA, len(numas), unknownBridge, len(bridges)
+func (s *allocationSearch) lowerBound(start, remaining int) allocationScore {
+	bound := s.score
+	needNew := remaining
+	var capacities []int
+	for sid, capacity := range s.suffixSID[start] {
+		if s.sidCounts[sid] > 0 {
+			needNew -= capacity
+		} else if capacity > 0 {
+			capacities = append(capacities, capacity)
+		}
+	}
+	slices.Sort(capacities)
+	for i := len(capacities) - 1; i >= 0 && needNew > 0; i-- {
+		bound.sidGroups++
+		needNew -= capacities[i]
+	}
+	bound.unknownNUMA += max(0, remaining-s.suffixKnownNUMA[start])
+	bound.unknownPCI += max(0, remaining-s.suffixKnownPCI[start])
+	newPairs := remaining*len(s.chosen) + remaining*(remaining-1)/2
+	bound.separateRoots += newPairs * s.minSeparateRoots
+	knownFinally := len(s.chosen) + remaining - bound.unknownPCI
+	knownNow := len(s.chosen) - s.score.unknownPCI
+	connectedNow := knownNow*(knownNow-1)/2 - s.score.separateRoots
+	connectedFinally := knownFinally*(knownFinally-1)/2 - bound.separateRoots
+	cheap := bound
+	cheap.totalDistance += max(0, connectedFinally-connectedNow) * s.minDistance
+	if connectedFinally > 0 {
+		cheap.maxDistance = max(cheap.maxDistance, s.minDistance)
+	}
+	if !cheap.less(s.bestScore) {
+		return cheap
+	}
+	// A still-better NUMA/SID/availability prefix cannot be pruned by PCI
+	// metrics, so avoid computing the more expensive tree bound in that case.
+	if slices.Compare(bound.values()[:4], s.bestScore.values()[:4]) < 0 {
+		return cheap
+	}
+	// Any completion needs 'remaining' candidates. Their existing connections
+	// to the mandatory/chosen devices bound its diameter from below.
+	worst := make([]int, 0, len(s.candidates)-start)
+	for _, candidate := range s.candidates[start:] {
+		distance := 0
+		for _, chosen := range s.chosen {
+			distance = max(distance, s.allocator.pairs[candidate][chosen].hops)
+		}
+		worst = append(worst, distance)
+	}
+	slices.Sort(worst)
+	bound.maxDistance = max(bound.maxDistance, worst[remaining-1])
+	if !bound.less(s.bestScore) {
+		return bound
+	}
+	pci := s.pciLowerBound(start, knownFinally)
+	bound.separateRoots, bound.totalDistance = pci.separateRoots, pci.totalDistance
+	if knownFinally*(knownFinally-1)/2 > bound.separateRoots {
+		bound.maxDistance = max(bound.maxDistance, s.minDistance)
+	}
+	return bound
 }
 
 func validateMustInclude(availableDevices map[string]NPUDevice, mustIncludeDeviceIDs []string, allocationSize int) error {
@@ -323,41 +343,4 @@ func normalizeMustInclude(mustIncludeDeviceIDs []string) ([]string, map[string]s
 		selected = append(selected, deviceID)
 	}
 	return selected, excluded
-}
-
-func bridgeIndexForDevice(device NPUDevice) (int, bool) {
-	switch device.Info.PCIDeviceID {
-	case "1251", "1250":
-		return ca25BridgeIndex, true
-	case "1221", "1220":
-		return ca22BridgeIndex, true
-	}
-
-	switch {
-	case strings.HasPrefix(device.Info.ProductName, "RBLN-CA25"):
-		return ca25BridgeIndex, true
-	case strings.HasPrefix(device.Info.ProductName, "RBLN-CA22"):
-		return ca22BridgeIndex, true
-	default:
-		return 0, false
-	}
-}
-
-func getPCIBridge(pciAddr string, bridgeIndex int) (string, error) {
-	devicePath := filepath.Join(topologyPCISysfsDevicesPath, pciAddr)
-	realPath, err := filepath.EvalSymlinks(devicePath)
-	if err != nil {
-		return "", err
-	}
-
-	var pciAddresses []string
-	for _, segment := range strings.Split(filepath.Clean(realPath), string(os.PathSeparator)) {
-		if topologyPCIAddressPattern.MatchString(segment) {
-			pciAddresses = append(pciAddresses, segment)
-		}
-	}
-	if len(pciAddresses) <= bridgeIndex {
-		return "", fmt.Errorf("PCI hierarchy does not contain bridge at index %d", bridgeIndex)
-	}
-	return pciAddresses[bridgeIndex], nil
 }
