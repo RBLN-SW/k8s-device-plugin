@@ -17,7 +17,7 @@ ARG BASE_IMAGE=undefined
 FROM --platform=$BUILDPLATFORM golang:${GOLANG_VERSION} AS build
 
 # The build stage needs VERSION too, not just the label below: it is what the
-# "Starting rbln-device-plugin" log record reports, and without it every
+# startup log record reports, and without it every
 # shipped image logs an empty version.
 ARG VERSION
 # Set by buildx per target platform. Cross-compiling on the build host keeps the

@@ -24,7 +24,7 @@ jobs:
       # Prefix of the GitHub release title.
       release_name: RBLN Device Plugin for NPUs
       # Helm chart directory, or remove both chart lines if there is no chart.
-      chart_dir: deployments/helm/rbln-device-plugin
+      chart_dir: deployments/helm/k8s-device-plugin-chart
       # yq expression that points the rc chart's image at Harbor, e.g.
       # '.image.registry = env(HARBOR_HOST)'.
       chart_rc_values: '.image.repository = strenv(HARBOR_REGISTRY) + "/k8s-device-plugin"'

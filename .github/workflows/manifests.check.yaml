@@ -14,4 +14,4 @@ jobs:
       - uses: azure/setup-helm@v4
         name: Setup Helm
       - name: Run helm lint
-        run: helm lint deployments/helm/rbln-device-plugin
+        run: helm lint deployments/helm/k8s-device-plugin-chart
