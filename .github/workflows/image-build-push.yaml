@@ -19,7 +19,7 @@ on:
         type: string
         description: Runner label for the build job
         required: false
-        default: sw-cloud-cluster-ci
+        default: rbln-sw-k8s-general
       platform:
         type: string
         description: Target build platform
