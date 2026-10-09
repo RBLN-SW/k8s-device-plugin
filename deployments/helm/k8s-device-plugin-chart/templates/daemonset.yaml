@@ -1,14 +1,14 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "rbln-device-plugin.fullname" . }}
-  namespace: {{ include "rbln-device-plugin.namespace" . }}
+  name: {{ include "k8s-device-plugin-chart.fullname" . }}
+  namespace: {{ include "k8s-device-plugin-chart.namespace" . }}
   labels:
-    {{- include "rbln-device-plugin.labels" . | nindent 4 }}
+    {{- include "k8s-device-plugin-chart.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
-      {{- include "rbln-device-plugin.selectorLabels" . | nindent 6 }}
+      {{- include "k8s-device-plugin-chart.selectorLabels" . | nindent 6 }}
   {{- with .Values.devicePlugin.updateStrategy }}
   updateStrategy:
     {{- toYaml . | nindent 4 }}
@@ -16,7 +16,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "rbln-device-plugin.selectorLabels" . | nindent 8 }}
+        {{- include "k8s-device-plugin-chart.selectorLabels" . | nindent 8 }}
       {{- with .Values.devicePlugin.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
@@ -29,12 +29,12 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "rbln-device-plugin.serviceAccountName" . }}
+      serviceAccountName: {{ include "k8s-device-plugin-chart.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.devicePlugin.podSecurityContext | nindent 8 }}
       containers:
       - name: plugin
-        image: {{ include "rbln-device-plugin.fullimage" . }}
+        image: {{ include "k8s-device-plugin-chart.fullimage" . }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         command: ["rbln-device-plugin"]
         securityContext:

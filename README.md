@@ -39,9 +39,9 @@ make -f deployments/container/Makefile build \
 2. Install the Helm chart from this repository:
 
 ```bash
-helm upgrade --install rbln-device-plugin \
-  ./deployments/helm/rbln-device-plugin \
-  -n rbln-device-plugin \
+helm upgrade --install k8s-device-plugin \
+  ./deployments/helm/k8s-device-plugin-chart \
+  -n k8s-device-plugin \
   --create-namespace \
   --set image.repository=<registry>/k8s-device-plugin \
   --set image.tag=<tag>
@@ -50,13 +50,17 @@ helm upgrade --install rbln-device-plugin \
 3. Verify the rollout:
 
 ```bash
-kubectl -n rbln-device-plugin get daemonset,pods
+kubectl -n k8s-device-plugin get daemonset,pods
 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.allocatable}{"\n"}{end}'
 ```
 
 If generic resource mode is enabled, you should see `rebellions.ai/npu`.
 Otherwise, allocatable resources are exposed as `rebellions.ai/ATOM` and/or
 `rebellions.ai/REBEL` depending on installed hardware.
+
+The chart is named `k8s-device-plugin-chart`; release workflows publish it to
+`<registry>/k8s-device-plugin-chart:<chart-version>`. The container image uses
+`<registry>/k8s-device-plugin:<image-tag>`.
 
 ## Configuration
 
@@ -154,8 +158,8 @@ heuristic, not a measurement of physical host distance, bandwidth, or P2P suppor
 The plugin can export NPU allocation traces via OpenTelemetry. When an OTLP
 gRPC endpoint is configured, each kubelet `Allocate` call produces an
 `Allocate` span with a child `allocateContainer` span per container, carrying
-the assigned NPU IDs, PCI bus IDs, and RSD group path. Spans are tagged with
-`service.name=rbln-device-plugin` and the node name (`k8s.node.name`).
+the assigned NPU IDs, PCI bus IDs, and RSD group path. Spans include the service
+name (`service.name`) and the node name (`k8s.node.name`).
 
 Tracing is disabled by default and is strictly best-effort: if the endpoint is
 empty, tracing is a no-op, and if exporter setup fails (e.g. a malformed
@@ -165,9 +169,9 @@ than aborting NPU scheduling on the node.
 With the Helm chart, set the endpoint via:
 
 ```bash
-helm upgrade --install rbln-device-plugin \
-  ./deployments/helm/rbln-device-plugin \
-  -n rbln-device-plugin \
+helm upgrade --install k8s-device-plugin \
+  ./deployments/helm/k8s-device-plugin-chart \
+  -n k8s-device-plugin \
   --set devicePlugin.otlpEndpoint=<collector-host>:4317
 ```
 
@@ -210,11 +214,11 @@ carry `component=grpc`, and `caller` is added at `debug`.
 At `info` the stream is a narrative of state, not a heartbeat — a scan that finds
 nothing new logs nothing:
 
-- **Lifecycle** — `Starting rbln-device-plugin` (with version and the resolved
+- **Lifecycle** — startup (with version and the resolved
   configuration), `Registered device plugin with kubelet` plus one
   `Device exposed` per device, then `Shutdown signal received` (naming the
   `signal`, so a kubelet drain is distinguishable from a crash-adjacent
-  `SIGQUIT`) and `Stopped rbln-device-plugin`.
+  `SIGQUIT`) and shutdown.
 - **Inventory changes** — `Device appeared in inventory`,
   `Device disappeared from inventory` (warn), and `Device state changed`. Each
   carries the resulting `deviceCount` / `healthyCount` / `unhealthyCount`, so one
