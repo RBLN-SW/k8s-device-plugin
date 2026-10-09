@@ -71,6 +71,84 @@ The binary can be configured with CLI flags or environment variables.
 | `--device-scan-interval` | `DEVICE_SCAN_INTERVAL` | `1m` | Polling interval for refreshing the device inventory |
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | (empty) | OTLP gRPC endpoint to export allocation traces to; leave empty to disable tracing |
 
+## Preferred device allocation
+
+The plugin reads each candidate's `/sys/bus/pci/devices/<BDF>` symlink and builds
+a forest of PCI roots, shared upstream bridges, and NPU endpoints. This works
+for CA22, CA25, and CR13 without product-specific bridge depths. Placement does
+not call `rbln-smi --topo` or read the driver's RSD-filtered `topology` attribute,
+so splitting devices into RSD groups does not hide their PCI relationships.
+Device discovery and RSD group creation still use the existing library.
+
+Selection preserves kubelet's mandatory devices and compares complete device
+combinations, including partial selections within the same SID. The policy is
+lexicographic; lower scores win in this order:
+
+1. Number of selected devices with unknown NUMA, then number of distinct known
+   NUMA nodes. NUMA is evaluated per selected device, not from the first device
+   in a SID group. Missing, invalid, and negative NUMA values are unknown.
+2. Number of distinct SID groups. A valid shared SID is evidence of a shared
+   card. Empty, `N/A`, `unknown`, and all-zero SIDs are treated as separate
+   devices, not as one shared card.
+3. Number of devices with unreadable PCI paths, then number of device pairs
+   under separate PCI roots. Separate roots have no known common ancestor;
+   the plugin does not invent an inter-root hop count.
+4. Maximum LCA distance among connected pairs, then the sum of those distances.
+   Mandatory devices participate in both metrics. For endpoints A and B,
+   `distance = depth(A) + depth(B) - 2 * depth(LCA(A, B))`.
+5. Lexicographic device ID order for deterministic ties.
+
+NUMA locality takes priority even when keeping devices on one NUMA node uses
+more cards. For example, four available devices on three local cards beat
+a two-card combination spanning NUMA nodes. SID packing then minimizes the
+cards used, and PCI distance minimizes the worst path before the total path
+length. Group fullness or a fixed ID prefix cannot override these priorities.
+Unknown PCI information only affects that device; valid
+paths between the other selected devices remain usable. If all topology
+metadata is absent, allocation still returns the requested number of available
+devices, including the mandatory ones, with stable ID ordering.
+
+For example, consider this PCI tree (all devices initially have distinct SIDs
+and NUMA node 0):
+
+```text
+PCI root A
+├── Root port 0
+│   └── Switch
+│       ├── Bridge A
+│       │   ├── rbln0
+│       │   └── rbln2
+│       └── Bridge B
+│           ├── rbln1
+│           └── rbln3
+└── Root port 1
+    └── rbln4
+PCI root B
+└── Root port
+    └── rbln5
+rbln6: PCI path unavailable
+```
+
+The distances are `d(0,2)=2`, `d(0,1)=4`, and `d(0,4)=6`.
+`rbln0` and `rbln5` belong to separate roots, so their distance is not known.
+
+| Request / changed information | Preferred devices | Reason |
+| --- | --- | --- |
+| Choose 2 | `rbln0, rbln2` | Closest pair; ID order breaks the tie with `rbln1, rbln3` |
+| Choose 2; only 0/2/4 available; 0/4 share a SID | `rbln0, rbln4` | Keep one shared card despite the longer visible PCI path |
+| Include 0, choose 2 from 0/1/2; 2 is on NUMA 1 | `rbln0, rbln1` | Same NUMA takes precedence over the shorter 0–2 PCI path |
+| Choose 2 from 0/1/2 sharing one SID | `rbln0, rbln2` | Compare subsets within the SID instead of taking the first two IDs |
+| Include 6, choose 3 | `rbln6, rbln0, rbln2` | Keep the required device with missing PCI data and optimize the remaining known pair |
+| Include 0, choose 2 from 0/4/5 | `rbln0, rbln4` | A path under one PCI root is preferable to an unmeasured inter-root path |
+| Choose 2 with all SID/NUMA/PCI information missing | `rbln0, rbln1` | Deterministic fallback |
+
+The search uses admissible bounds to skip combinations that cannot improve the
+score; a tree dynamic program bounds the remaining PCI cost without enumerating
+every subset. It does not greedily choose one neighbor at a time. These examples and
+an independent exhaustive comparison are covered by `pci_topology_test.go`.
+In a VM, the tree is the guest's PCI hierarchy. The metric is a locality
+heuristic, not a measurement of physical host distance, bandwidth, or P2P support.
+
 ## Observability
 
 The plugin can export NPU allocation traces via OpenTelemetry. When an OTLP
