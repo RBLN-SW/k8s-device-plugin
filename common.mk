@@ -14,7 +14,7 @@
 
 # Keep in sync with go.mod's toolchain directive: this is the Go that builds the
 # shipped binary, so its stdlib is what the image scan reports.
-GOLANG_VERSION ?= 1.26.7
+GOLANG_VERSION ?= 1.26.9
 
 # Read by .github/workflows/image-scan.yaml so CI and `make scan-image` agree.
 TRIVY_VERSION ?= v0.74.0
