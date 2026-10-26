@@ -299,3 +299,8 @@ pod requesting VFs.
 
 This project is licensed under the Apache License 2.0. See
 [`LICENSE`](LICENSE) for details.
+
+## RC validation
+
+Release candidates are tested through RNPM using their published images.
+See [RC validation setup and image inputs](docs/rc-validation.md).
