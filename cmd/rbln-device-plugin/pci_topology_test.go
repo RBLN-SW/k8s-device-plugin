@@ -240,6 +240,47 @@ func TestPCIAllocationExamples(t *testing.T) {
 	}
 }
 
+func TestVFAllocationPreservesNUMAAndPCIPolicy(t *testing.T) {
+	tests := []struct {
+		name       string
+		sharedPF   []string
+		remoteNUMA []string
+		want       []string
+	}{
+		{name: "PCI distance breaks ties between parent PFs", want: []string{"rbln0", "rbln2"}},
+		{name: "shared parent beats a closer different parent", sharedPF: []string{"rbln0", "rbln4"},
+			want: []string{"rbln0", "rbln4"}},
+		{name: "NUMA locality precedes PCI distance", remoteNUMA: []string{"rbln2"},
+			want: []string{"rbln0", "rbln1"}},
+		{name: "PCI distance selects among the same parent's VFs", sharedPF: []string{"rbln0", "rbln1", "rbln2"},
+			want: []string{"rbln0", "rbln2"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := standardPCITestFixture(t)
+			for id, device := range fixture.devices {
+				device.Info.SID = "shared-vf-sid"
+				device.ParentPFBusID = device.Info.PCIBusID
+				if slices.Contains(tc.sharedPF, id) {
+					device.ParentPFBusID = fixture.devices["rbln0"].Info.PCIBusID
+				}
+				fixture.devices[id] = device
+			}
+			setPCITestNUMA(fixture.devices, "1", tc.remoteNUMA...)
+			plugin := testPluginWithDevices(fixture.devices)
+			available := []string{"rbln0", "rbln1", "rbln2", "rbln4"}
+			for pass := 0; pass < 2; pass++ {
+				selected, err := plugin.selectPreferredDeviceIDs(available, []string{"rbln0"}, 2)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertIDs(t, "selected", selected, tc.want)
+				slices.Reverse(available)
+			}
+		})
+	}
+}
+
 func TestPCIAllocationPrefersOneNUMAAcrossThreeFragmentedCards(t *testing.T) {
 	paths := make(map[string]string)
 	for i := 0; i < 7; i++ {

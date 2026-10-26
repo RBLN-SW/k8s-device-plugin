@@ -2,7 +2,7 @@ module github.com/RBLN-SW/k8s-device-plugin
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0

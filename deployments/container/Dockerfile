@@ -28,7 +28,9 @@ WORKDIR /build
 COPY . .
 
 RUN mkdir /artifacts
-RUN make PREFIX=/artifacts VERSION="$VERSION" GOARCH="$TARGETARCH" cmds
+# CI reference clones may point at Git objects outside the build context.
+# VERSION already identifies the build, so skip Go's automatic VCS stamping.
+RUN GOFLAGS=-buildvcs=false make PREFIX=/artifacts VERSION="$VERSION" GOARCH="$TARGETARCH" cmds
 
 FROM ${BASE_IMAGE}
 

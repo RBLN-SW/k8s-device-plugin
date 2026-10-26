@@ -6,9 +6,11 @@ API, and prepares container runtime annotations for CDI-based integration.
 
 The current implementation supports Rebellions device families exposed as:
 
-- `rebellions.ai/ATOM`
-- `rebellions.ai/REBEL`
-- `rebellions.ai/npu` when generic resource mode is enabled
+- `rebellions.ai/npu` (default, generic resource mode)
+- `rebellions.ai/ATOM` and `rebellions.ai/REBEL` when generic resource mode
+  is disabled
+- `rebellions.ai/npu-vf1` / `rebellions.ai/npu-vf4` for SR-IOV virtual
+  functions on partitioned REBEL nodes (see below)
 
 ## Quick Start
 
@@ -54,8 +56,8 @@ kubectl -n k8s-device-plugin get daemonset,pods
 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.allocatable}{"\n"}{end}'
 ```
 
-If generic resource mode is enabled, you should see `rebellions.ai/npu`.
-Otherwise, allocatable resources are exposed as `rebellions.ai/ATOM` and/or
+By default you should see `rebellions.ai/npu`. If generic resource mode is
+disabled, allocatable resources are exposed as `rebellions.ai/ATOM` and/or
 `rebellions.ai/REBEL` depending on installed hardware.
 
 The chart is named `k8s-device-plugin-chart`; release workflows publish it to
@@ -71,7 +73,7 @@ The binary can be configured with CLI flags or environment variables.
 | `--cdi-root` | `CDI_ROOT` | `/var/run/cdi` | Directory used for CDI spec management |
 | `--kubelet-device-plugin-path` | `KUBELET_DEVICE_PLUGIN_PATH` | `/var/lib/kubelet/device-plugins` | Kubelet device plugin socket directory |
 | `--healthcheck-port` | `HEALTHCHECK_PORT` | `51515` | gRPC healthcheck port; set a negative value to disable it |
-| `--use-generic-resource-name` | `USE_GENERIC_RESOURCE_NAME` | `false` | Expose `rebellions.ai/npu` instead of per-product resources |
+| `--use-generic-resource-name` | `USE_GENERIC_RESOURCE_NAME` | `true` | Expose `rebellions.ai/npu` instead of per-product resources |
 | `--device-scan-interval` | `DEVICE_SCAN_INTERVAL` | `1m` | Polling interval for refreshing the device inventory |
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | (empty) | OTLP gRPC endpoint to export allocation traces to; leave empty to disable tracing |
 
@@ -93,7 +95,8 @@ lexicographic; lower scores win in this order:
    in a SID group. Missing, invalid, and negative NUMA values are unknown.
 2. Number of distinct SID groups. A valid shared SID is evidence of a shared
    card. Empty, `N/A`, `unknown`, and all-zero SIDs are treated as separate
-   devices, not as one shared card.
+   devices, not as one shared card. SR-IOV VFs group by their parent PF's PCI
+   address instead of SID; the same NUMA and PCI priorities apply.
 3. Number of devices with unreadable PCI paths, then number of device pairs
    under separate PCI roots. Separate roots have no known common ancestor;
    the plugin does not invent an inter-root hop count.
@@ -254,6 +257,43 @@ unusable hardware.
 Because a steady node logs nothing, `debug` also carries
 `Reconciled device inventory` once per `--device-scan-interval`: it is how you
 confirm the scan loop is alive and how long a scan takes.
+
+## SR-IOV Partitioned Nodes (REBEL)
+
+REBEL NPUs can be partitioned into SR-IOV virtual functions (supported
+partition modes: `vf-1` and `vf-4`). The plugin detects VFs directly from
+sysfs — no flag or chart value is required — and advertises them as a
+dedicated resource derived from the partition mode:
+
+| Partition mode | Advertised resource | Devices per PF |
+| --- | --- | --- |
+| `vf-1` | `rebellions.ai/npu-vf1` | 1 (all 4 chiplets) |
+| `vf-4` | `rebellions.ai/npu-vf4` | 4 (1 chiplet each) |
+
+Behavior on a partitioned node:
+
+- VF resources are always named `rebellions.ai/npu-vf<N>`, regardless of
+  `--use-generic-resource-name`.
+- A PF that hosts VFs is not advertised: in the current driver generation it
+  is removed from the compute topology while SR-IOV is enabled, so exposing
+  it would double-count compute capacity.
+- Non-partitioned PFs on the same node keep their usual resource names, so
+  mixed nodes advertise both (e.g. `rebellions.ai/npu-vf4` and
+  `rebellions.ai/npu`).
+- PFs with an unsupported VF count are excluded from advertisement and
+  logged as errors.
+- VF allocations create a dedicated RSD group, just like PF allocations.
+  Each container receives that group's node as `/dev/rsd0`, its VF device
+  nodes (e.g. `/dev/rbln0-0`), and the usual CDI runtime annotation.
+
+Prerequisite: partitioning itself is managed outside this plugin. When the
+plugin is deployed through the RBLN NPU Operator, its init container gates
+startup until the node's partition state is ready
+(`/run/rbln/validations/partition-ready`), so VFs already exist by the time
+the plugin scans devices.
+
+See [`examples/single-pod-npu-vf4.md`](examples/single-pod-npu-vf4.md) for a
+pod requesting VFs.
 
 ## License
 

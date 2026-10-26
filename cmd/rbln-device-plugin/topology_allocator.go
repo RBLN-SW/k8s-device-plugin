@@ -82,7 +82,11 @@ func newTopologyAllocator(devices map[string]NPUDevice) *topologyAllocator {
 	for _, id := range sortedDeviceIDs(devices) {
 		info := devices[id].Info
 		sidKey := "sid:" + strings.TrimSpace(info.SID)
-		if !knownSID(info.SID) {
+		// VF SIDs do not reliably distinguish parent PFs. Pack VFs by
+		// their parent while preserving the NUMA and PCI distance policy.
+		if parentPF := devices[id].ParentPFBusID; parentPF != "" {
+			sidKey = "pf:" + parentPF
+		} else if !knownSID(info.SID) {
 			sidKey = "device:" + id
 		}
 		if _, exists := sids[sidKey]; !exists {
