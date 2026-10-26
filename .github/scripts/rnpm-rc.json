@@ -1,0 +1,13 @@
+{
+  "bundle_id": "f959184e-538d-49c9-9b43-68151af7d00e",
+  "ob_pipeline": "pr-k8s-device-plugin",
+  "images": [
+    {
+      "name": "k8s-device-plugin",
+      "prefix": "DEVICE_PLUGIN"
+    }
+  ],
+  "timeout_seconds": 10200,
+  "repository": "RBLN-SW/k8s-device-plugin",
+  "execution_repository": "RBLN-SW/k8s-device-plugin"
+}
