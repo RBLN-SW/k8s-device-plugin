@@ -11,6 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# Modifications Copyright 2026 Rebellions Inc.
+# This file is derived from github.com/kubernetes-sigs/dra-example-driver
+# (common.mk, commit 7c9b507c) and has been
+# modified by Rebellions Inc. See NOTICE for details.
 
 # Keep in sync with go.mod's toolchain directive: this is the Go that builds the
 # shipped binary, so its stdlib is what the image scan reports.
