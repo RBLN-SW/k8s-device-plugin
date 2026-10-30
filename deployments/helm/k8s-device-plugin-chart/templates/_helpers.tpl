@@ -1,3 +1,9 @@
+{{/*
+Copyright The Kubernetes Authors. Apache License 2.0.
+This file is derived from github.com/kubernetes-sigs/dra-example-driver
+(deployments/helm/dra-example-driver/templates/_helpers.tpl, commit 7c9b507c).
+Modifications Copyright 2026 Rebellions Inc. See NOTICE for details.
+*/}}
 {{- define "k8s-device-plugin-chart.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}

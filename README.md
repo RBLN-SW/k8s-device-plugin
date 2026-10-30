@@ -295,12 +295,20 @@ the plugin scans devices.
 See [`examples/single-pod-npu-vf4.md`](examples/single-pod-npu-vf4.md) for a
 pod requesting VFs.
 
-## License
-
-This project is licensed under the Apache License 2.0. See
-[`LICENSE`](LICENSE) for details.
-
 ## RC validation
 
 Release candidates are tested through RNPM using their published images.
 See [RC validation setup and image inputs](docs/rc-validation.md).
+
+## License
+
+Copyright 2025-2026 Rebellions Inc.
+
+This project is licensed under the [Apache License 2.0](LICENSE). See
+[NOTICE](NOTICE) for attributions to upstream projects and
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for the licenses of the Go modules
+compiled into the binaries.
+
+The RBLN NPU driver, rbln-smd, rbln-smi and the NPU runtime libraries are
+separate products distributed under the Rebellions Software User License
+Agreement.
