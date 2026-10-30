@@ -18,11 +18,21 @@ jobs:
         cache: false
     - name: update vendor
       run: go mod vendor
-    - name: Check licenses and third-party notices
-      run: make license-check verify-third-party-notices
     - name: Lint
       uses: golangci/golangci-lint-action@v9
       with:
         version: latest
         args: -v --timeout 5m
         skip-cache: true
+
+  license-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: false
+    - name: Check licenses and third-party notices
+      run: make license-check verify-third-party-notices
