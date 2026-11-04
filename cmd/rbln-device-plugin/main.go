@@ -91,7 +91,7 @@ func newApp(logSettings logging.Settings) *cli.App {
 		&cli.DurationFlag{
 			Name:        "device-scan-interval",
 			Usage:       "Polling interval used to refresh the device inventory.",
-			Value:       time.Minute,
+			Value:       5 * time.Second,
 			Destination: &flags.deviceScanInterval,
 			EnvVars:     []string{"DEVICE_SCAN_INTERVAL"},
 		},
