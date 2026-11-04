@@ -74,8 +74,14 @@ The binary can be configured with CLI flags or environment variables.
 | `--kubelet-device-plugin-path` | `KUBELET_DEVICE_PLUGIN_PATH` | `/var/lib/kubelet/device-plugins` | Kubelet device plugin socket directory |
 | `--healthcheck-port` | `HEALTHCHECK_PORT` | `51515` | gRPC healthcheck port; set a negative value to disable it |
 | `--use-generic-resource-name` | `USE_GENERIC_RESOURCE_NAME` | `true` | Expose `rebellions.ai/npu` instead of per-product resources |
-| `--device-scan-interval` | `DEVICE_SCAN_INTERVAL` | `1m` | Polling interval for refreshing the device inventory |
+| `--device-scan-interval` | `DEVICE_SCAN_INTERVAL` | `5s` | Polling interval for refreshing the device inventory |
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | (empty) | OTLP gRPC endpoint to export allocation traces to; leave empty to disable tracing |
+
+The plugin scans devices immediately at startup and then every 5 seconds by
+default. Each scan refreshes PF/VF inventory, SR-IOV classification, and device
+health, and updates the resources advertised to kubelet. PFs hosting VFs are
+excluded from advertisement; their supported VFs are advertised instead.
+Use `--device-scan-interval` or `DEVICE_SCAN_INTERVAL` to override the interval.
 
 ## Preferred device allocation
 
