@@ -4,3 +4,11 @@ description: Helm chart for the Rebellions NPU device plugin
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+home: https://github.com/RBLN-SW/k8s-device-plugin
+sources:
+  - https://github.com/RBLN-SW/k8s-device-plugin
+maintainers:
+  - name: Rebellions Inc.
+    email: sw_devops@rebellions.ai
+annotations:
+  artifacthub.io/license: Apache-2.0

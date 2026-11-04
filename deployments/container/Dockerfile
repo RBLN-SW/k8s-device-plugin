@@ -11,6 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# Modifications Copyright 2026 Rebellions Inc.
+# This file is derived from github.com/kubernetes-sigs/dra-example-driver
+# (deployments/container/Dockerfile, commit 7c9b507c) and has been
+# modified by Rebellions Inc. See NOTICE for details.
 
 ARG GOLANG_VERSION=undefined
 ARG BASE_IMAGE=undefined
@@ -49,7 +54,13 @@ ARG RELEASE="N/A"
 LABEL release="N/A"
 LABEL summary="Rebellions NPU device plugin for Kubernetes"
 LABEL description="See summary"
+LABEL maintainer="Rebellions sw_devops@rebellions.ai"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.source="https://github.com/RBLN-SW/k8s-device-plugin"
+LABEL org.opencontainers.image.vendor="Rebellions Inc."
 
 COPY --from=build /artifacts/rbln-device-plugin /usr/bin/rbln-device-plugin
+
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES /licenses/
 
 ENTRYPOINT ["/usr/bin/rbln-device-plugin"]
