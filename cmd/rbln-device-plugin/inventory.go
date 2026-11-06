@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	rblndevice "github.com/rbln-sw/rblnlib-go/pkg/device"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
@@ -16,11 +15,6 @@ import (
 )
 
 var getDevices = rblndevice.GetDevices
-
-// unsupportedProductsLogged keeps the unsupported-product error to one record
-// per device: a product this build does not know about stays unknown for the
-// process's lifetime, and discovery re-runs every scan interval.
-var unsupportedProductsLogged sync.Map
 
 type NPUDevice struct {
 	Info   rblndevice.Device
@@ -38,7 +32,7 @@ type DeviceGroup struct {
 	Devices      map[string]NPUDevice
 }
 
-func discoverDeviceGroups(ctx context.Context, useGenericResourceName bool) map[string]DeviceGroup {
+func discoverDeviceGroups(ctx context.Context) map[string]DeviceGroup {
 	groups := make(map[string]DeviceGroup)
 
 	devices, err := getDevices(ctx)
@@ -57,25 +51,15 @@ func discoverDeviceGroups(ctx context.Context, useGenericResourceName bool) map[
 			)
 			continue
 		}
-		resourceName, advertise, err := resourceForDevice(device, sriov, useGenericResourceName)
+		resourceName, advertise, err := resourceForDevice(device, sriov)
 		if err != nil {
-			if sriov.class == sriovClassVF {
-				slog.Error("Skipping VF with unsupported SR-IOV partition mode",
-					"err", err,
-					"device", device.Name,
-					"pciBusID", device.PCIBusID,
-					"parentPFBusID", sriov.parentPFBusID,
-					"numVFs", sriov.numVFs,
-				)
-				continue
-			}
-			if _, seen := unsupportedProductsLogged.LoadOrStore(device.Name+"/"+device.ProductName, struct{}{}); !seen {
-				slog.Error("Skipping device with unsupported product; it stays invisible to Kubernetes",
-					"err", err,
-					"device", device.Name,
-					"product", device.ProductName,
-				)
-			}
+			slog.Error("Skipping VF with unsupported SR-IOV partition mode",
+				"err", err,
+				"device", device.Name,
+				"pciBusID", device.PCIBusID,
+				"parentPFBusID", sriov.parentPFBusID,
+				"numVFs", sriov.numVFs,
+			)
 			continue
 		}
 		if !advertise {
@@ -192,9 +176,9 @@ func healthCounts(devices map[string]NPUDevice) (healthy, unhealthy int) {
 // is advertised under. Every device falls into exactly one of three classes:
 //
 //  1. VF (physfn present): always rebellions.ai/npu-vf<N>, where N is the
-//     parent PF's sriov_numvfs, regardless of useGenericResourceName.
-//  2. Non-partitioned PF (sriov_numvfs == 0 or absent): the pre-existing
-//     product-based resource naming, unchanged.
+//     parent PF's sriov_numvfs.
+//  2. Non-partitioned PF (sriov_numvfs == 0 or absent): always the generic
+//     rebellions.ai/npu resource, independent of product name.
 //  3. VF-hosting PF (sriov_numvfs > 0): not advertised. In the current
 //     driver generation, enabling SR-IOV removes the PF from the RSD compute
 //     topology (its npu_id disappears), so it is not a usable compute
@@ -205,10 +189,10 @@ func healthCounts(devices map[string]NPUDevice) (healthy, unhealthy int) {
 // remaining chiplets, only branch 3 should change: decide whether the PF is
 // usable from a real signal (e.g. presence of npu_id in rbln-smd v1
 // DeviceInfo) and let usable hosting PFs fall through to branch 2, at which
-// point the PF (existing resource name) and its VFs (npu-vf<N>) are
+// point the PF (npu) and its VFs (npu-vf<N>) are
 // advertised at the same time. Do not implement that today — the current
 // driver cannot produce that state.
-func resourceForDevice(device rblndevice.Device, sriov sriovInfo, useGenericResourceName bool) (string, bool, error) {
+func resourceForDevice(device rblndevice.Device, sriov sriovInfo) (string, bool, error) {
 	switch sriov.class {
 	case sriovClassVF:
 		resourceName, err := vfResourceName(sriov.numVFs)
@@ -219,26 +203,7 @@ func resourceForDevice(device rblndevice.Device, sriov sriovInfo, useGenericReso
 	case sriovClassHostingPF:
 		return "", false, nil
 	default:
-		resourceName, err := resourceNameForProduct(device.ProductName, useGenericResourceName)
-		if err != nil {
-			return "", false, err
-		}
-		return resourceName, true, nil
-	}
-}
-
-func resourceNameForProduct(productName string, useGenericResourceName bool) (string, error) {
-	if useGenericResourceName {
-		return consts.GenericResourceName, nil
-	}
-
-	switch {
-	case strings.HasPrefix(productName, "RBLN-CR"):
-		return consts.RebelResourceName, nil
-	case strings.HasPrefix(productName, "RBLN-CA"):
-		return consts.AtomResourceName, nil
-	default:
-		return "", fmt.Errorf("unsupported ProductName %q: expected prefix RBLN-CR or RBLN-CA", productName)
+		return consts.GenericResourceName, true, nil
 	}
 }
 

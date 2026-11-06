@@ -4,11 +4,9 @@
 It discovers locally available NPUs, exposes them through the kubelet device plugin
 API, and prepares container runtime annotations for CDI-based integration.
 
-The current implementation supports Rebellions device families exposed as:
+The plugin uses fixed resource names for all Rebellions device families:
 
-- `rebellions.ai/npu` (default, generic resource mode)
-- `rebellions.ai/ATOM` and `rebellions.ai/REBEL` when generic resource mode
-  is disabled
+- `rebellions.ai/npu` for non-partitioned physical functions
 - `rebellions.ai/npu-vf1` / `rebellions.ai/npu-vf4` for SR-IOV virtual
   functions on partitioned REBEL nodes (see below)
 
@@ -56,9 +54,8 @@ kubectl -n k8s-device-plugin get daemonset,pods
 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.allocatable}{"\n"}{end}'
 ```
 
-By default you should see `rebellions.ai/npu`. If generic resource mode is
-disabled, allocatable resources are exposed as `rebellions.ai/ATOM` and/or
-`rebellions.ai/REBEL` depending on installed hardware.
+Non-partitioned devices appear as `rebellions.ai/npu`. Partitioned devices
+appear as `rebellions.ai/npu-vf1` or `rebellions.ai/npu-vf4`.
 
 The chart is named `k8s-device-plugin-chart`; release workflows publish it to
 `<registry>/k8s-device-plugin-chart:<chart-version>`. The container image uses
@@ -73,7 +70,6 @@ The binary can be configured with CLI flags or environment variables.
 | `--cdi-root` | `CDI_ROOT` | `/var/run/cdi` | Directory used for CDI spec management |
 | `--kubelet-device-plugin-path` | `KUBELET_DEVICE_PLUGIN_PATH` | `/var/lib/kubelet/device-plugins` | Kubelet device plugin socket directory |
 | `--healthcheck-port` | `HEALTHCHECK_PORT` | `51515` | gRPC healthcheck port; set a negative value to disable it |
-| `--use-generic-resource-name` | `USE_GENERIC_RESOURCE_NAME` | `true` | Expose `rebellions.ai/npu` instead of per-product resources |
 | `--device-scan-interval` | `DEVICE_SCAN_INTERVAL` | `5s` | Polling interval for refreshing the device inventory |
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | (empty) | OTLP gRPC endpoint to export allocation traces to; leave empty to disable tracing |
 
@@ -278,14 +274,12 @@ dedicated resource derived from the partition mode:
 
 Behavior on a partitioned node:
 
-- VF resources are always named `rebellions.ai/npu-vf<N>`, regardless of
-  `--use-generic-resource-name`.
+- VF resources are always named `rebellions.ai/npu-vf<N>`.
 - A PF that hosts VFs is not advertised: in the current driver generation it
   is removed from the compute topology while SR-IOV is enabled, so exposing
   it would double-count compute capacity.
-- Non-partitioned PFs on the same node keep their usual resource names, so
-  mixed nodes advertise both (e.g. `rebellions.ai/npu-vf4` and
-  `rebellions.ai/npu`).
+- Non-partitioned PFs on the same node use `rebellions.ai/npu`, so mixed
+  nodes advertise both (e.g. `rebellions.ai/npu-vf4` and `rebellions.ai/npu`).
 - PFs with an unsupported VF count are excluded from advertisement and
   logged as errors.
 - VF allocations create a dedicated RSD group, just like PF allocations.

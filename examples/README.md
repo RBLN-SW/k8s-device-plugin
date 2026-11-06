@@ -2,14 +2,7 @@
 
 This directory contains usage examples for the device plugin.
 
-A default installation uses the generic resource name `rebellions.ai/npu`.
-
-When generic resource mode is disabled
-(`--use-generic-resource-name=false`), resource names depend on the
-installed hardware:
-
-- `rebellions.ai/ATOM`
-- `rebellions.ai/REBEL`
+Non-partitioned NPUs always use the fixed resource name `rebellions.ai/npu`.
 
 On SR-IOV partitioned nodes, use `rebellions.ai/npu-vf1` or
 `rebellions.ai/npu-vf4` depending on the partition mode.

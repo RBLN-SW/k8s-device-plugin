@@ -5,8 +5,6 @@ const (
 	CDIClass            = "npu"
 	CDIKind             = CDIVendor + "/" + CDIClass
 	GenericResourceName = CDIKind
-	AtomResourceName    = CDIVendor + "/ATOM"
-	RebelResourceName   = CDIVendor + "/REBEL"
 	BaseCDIDevice       = "runtime"
 	RDSCDIClass         = "rds"
 	RDSCDIAllDevice     = "all"

@@ -16,13 +16,12 @@ func TestResourceForDevice(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		device     rblndevice.Device
-		sriov      sriovInfo
-		useGeneric bool
-		expected   string
-		advertise  bool
-		wantErr    bool
+		name      string
+		device    rblndevice.Device
+		sriov     sriovInfo
+		expected  string
+		advertise bool
+		wantErr   bool
 	}{
 		{
 			name:      "vf in vf-4 mode",
@@ -30,14 +29,6 @@ func TestResourceForDevice(t *testing.T) {
 			sriov:     sriovInfo{class: sriovClassVF, parentPFBusID: "0000:17:00.0", numVFs: 4},
 			expected:  "rebellions.ai/npu-vf4",
 			advertise: true,
-		},
-		{
-			name:       "vf naming ignores generic flag",
-			device:     rblndevice.Device{Name: "rbln0-0", ProductName: "RBLN-CR03"},
-			sriov:      sriovInfo{class: sriovClassVF, parentPFBusID: "0000:17:00.0", numVFs: 4},
-			useGeneric: true,
-			expected:   "rebellions.ai/npu-vf4",
-			advertise:  true,
 		},
 		{
 			name:      "vf in vf-1 mode",
@@ -58,32 +49,32 @@ func TestResourceForDevice(t *testing.T) {
 			sriov:  sriovInfo{class: sriovClassHostingPF, numVFs: 4},
 		},
 		{
-			name:       "plain pf generic mode",
-			device:     rblndevice.Device{Name: "rbln0", ProductName: "RBLN-CA25"},
-			sriov:      sriovInfo{class: sriovClassNone},
-			useGeneric: true,
-			expected:   consts.GenericResourceName,
-			advertise:  true,
-		},
-		{
 			name:      "plain pf atom",
 			device:    rblndevice.Device{Name: "rbln0", ProductName: "RBLN-CA25"},
 			sriov:     sriovInfo{class: sriovClassNone},
-			expected:  consts.AtomResourceName,
+			expected:  consts.GenericResourceName,
 			advertise: true,
 		},
 		{
 			name:      "plain pf rebel",
 			device:    rblndevice.Device{Name: "rbln0", ProductName: "RBLN-CR03"},
 			sriov:     sriovInfo{class: sriovClassNone},
-			expected:  consts.RebelResourceName,
+			expected:  consts.GenericResourceName,
 			advertise: true,
 		},
 		{
-			name:    "plain pf unsupported product",
-			device:  rblndevice.Device{Name: "rbln0", ProductName: "RBLN-XX01"},
-			sriov:   sriovInfo{class: sriovClassNone},
-			wantErr: true,
+			name:      "plain pf unknown product",
+			device:    rblndevice.Device{Name: "rbln0", ProductName: "RBLN-XX01"},
+			sriov:     sriovInfo{class: sriovClassNone},
+			expected:  consts.GenericResourceName,
+			advertise: true,
+		},
+		{
+			name:      "plain pf without product name",
+			device:    rblndevice.Device{Name: "rbln0"},
+			sriov:     sriovInfo{class: sriovClassNone},
+			expected:  consts.GenericResourceName,
+			advertise: true,
 		},
 	}
 
@@ -92,7 +83,7 @@ func TestResourceForDevice(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			actual, advertise, err := resourceForDevice(tc.device, tc.sriov, tc.useGeneric)
+			actual, advertise, err := resourceForDevice(tc.device, tc.sriov)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got %q advertise=%v", actual, advertise)
@@ -127,18 +118,11 @@ func TestDiscoverDeviceGroups(t *testing.T) {
 		}, nil
 	}
 
-	groups := discoverDeviceGroups(context.Background(), false)
-	if len(groups) != 2 {
-		t.Fatalf("expected 2 legacy groups, got %d", len(groups))
-	}
-	if _, ok := groups[consts.AtomResourceName].Devices["rbln0"]; !ok {
-		t.Fatalf("missing ATOM device group entry")
-	}
-	if _, ok := groups[consts.RebelResourceName].Devices["rbln1"]; !ok {
-		t.Fatalf("missing REBEL device group entry")
+	groups := discoverDeviceGroups(context.Background())
+	if len(groups) != 1 {
+		t.Fatalf("expected one generic group, got %v", groupNames(groups))
 	}
 
-	groups = discoverDeviceGroups(context.Background(), true)
 	group, ok := groups[consts.GenericResourceName]
 	if !ok {
 		t.Fatalf("missing generic resource group")
@@ -158,13 +142,13 @@ func TestDiscoverDeviceGroupsReportsZeroDevicesOnError(t *testing.T) {
 		return nil, errors.New("rbln-smi timed out")
 	}
 
-	groups := discoverDeviceGroups(context.Background(), false)
+	groups := discoverDeviceGroups(context.Background())
 	if len(groups) != 0 {
 		t.Fatalf("expected zero device groups on discovery error, got %d", len(groups))
 	}
 }
 
-func TestDiscoverDeviceGroupsSkipsUnsupportedProduct(t *testing.T) {
+func TestDiscoverDeviceGroupsIncludesUnknownProduct(t *testing.T) {
 	originalGetDevices := getDevices
 	t.Cleanup(func() {
 		getDevices = originalGetDevices
@@ -177,19 +161,19 @@ func TestDiscoverDeviceGroupsSkipsUnsupportedProduct(t *testing.T) {
 		}, nil
 	}
 
-	groups := discoverDeviceGroups(context.Background(), false)
+	groups := discoverDeviceGroups(context.Background())
 	if len(groups) != 1 {
-		t.Fatalf("expected 1 group with the unsupported device skipped, got %d", len(groups))
+		t.Fatalf("expected one generic group, got %v", groupNames(groups))
 	}
-	atom, ok := groups[consts.AtomResourceName]
+	generic, ok := groups[consts.GenericResourceName]
 	if !ok {
-		t.Fatalf("missing ATOM device group entry")
+		t.Fatalf("missing generic device group entry")
 	}
-	if _, ok := atom.Devices["rbln0"]; !ok {
-		t.Fatalf("supported sibling device must survive the skip")
+	if _, ok := generic.Devices["rbln0"]; !ok {
+		t.Fatalf("known product must be exposed")
 	}
-	if _, ok := atom.Devices["rbln1"]; ok {
-		t.Fatalf("unsupported device must not be exposed")
+	if _, ok := generic.Devices["rbln1"]; !ok {
+		t.Fatalf("unknown product must be exposed under the generic name")
 	}
 }
 
@@ -241,7 +225,7 @@ func TestDiscoverDeviceGroupsVF4Node(t *testing.T) {
 		}, nil
 	}
 
-	groups := discoverDeviceGroups(context.Background(), true)
+	groups := discoverDeviceGroups(context.Background())
 	if len(groups) != 1 {
 		t.Fatalf("expected only the VF group, got %d groups: %v", len(groups), groupNames(groups))
 	}
@@ -278,7 +262,7 @@ func TestDiscoverDeviceGroupsVF1Node(t *testing.T) {
 		}, nil
 	}
 
-	groups := discoverDeviceGroups(context.Background(), true)
+	groups := discoverDeviceGroups(context.Background())
 	if len(groups) != 1 {
 		t.Fatalf("expected only the VF group, got %d groups: %v", len(groups), groupNames(groups))
 	}
@@ -306,7 +290,7 @@ func TestDiscoverDeviceGroupsExcludesUnsupportedVFCount(t *testing.T) {
 		}, nil
 	}
 
-	groups := discoverDeviceGroups(context.Background(), true)
+	groups := discoverDeviceGroups(context.Background())
 	if len(groups) != 0 {
 		t.Fatalf("expected no groups for an unsupported vf-2 node, got %v", groupNames(groups))
 	}
@@ -333,9 +317,9 @@ func TestDiscoverDeviceGroupsMixedNode(t *testing.T) {
 		}, nil
 	}
 
-	groups := discoverDeviceGroups(context.Background(), false)
+	groups := discoverDeviceGroups(context.Background())
 	if len(groups) != 2 {
-		t.Fatalf("expected VF and REBEL groups, got %v", groupNames(groups))
+		t.Fatalf("expected VF and generic PF groups, got %v", groupNames(groups))
 	}
 	vfGroup, ok := groups["rebellions.ai/npu-vf4"]
 	if !ok {
@@ -347,15 +331,15 @@ func TestDiscoverDeviceGroupsMixedNode(t *testing.T) {
 	if _, ok := vfGroup.Devices["rbln0"]; ok {
 		t.Fatalf("VF-hosting PF must not appear in the VF group")
 	}
-	rebelGroup, ok := groups[consts.RebelResourceName]
+	pfGroup, ok := groups[consts.GenericResourceName]
 	if !ok {
-		t.Fatalf("missing REBEL group for the non-partitioned PF, got %v", groupNames(groups))
+		t.Fatalf("missing generic PF group for the non-partitioned PF, got %v", groupNames(groups))
 	}
-	if len(rebelGroup.Devices) != 1 {
-		t.Fatalf("expected 1 non-partitioned PF, got %d", len(rebelGroup.Devices))
+	if len(pfGroup.Devices) != 1 {
+		t.Fatalf("expected 1 non-partitioned PF, got %d", len(pfGroup.Devices))
 	}
-	if _, ok := rebelGroup.Devices["rbln1"]; !ok {
-		t.Fatalf("non-partitioned PF must keep its existing resource name")
+	if _, ok := pfGroup.Devices["rbln1"]; !ok {
+		t.Fatalf("non-partitioned PF must use the generic resource name")
 	}
 }
 
@@ -374,7 +358,7 @@ func TestDiscoverDeviceGroupsExcludesDeviceOnSysfsAnomaly(t *testing.T) {
 		}, nil
 	}
 
-	groups := discoverDeviceGroups(context.Background(), true)
+	groups := discoverDeviceGroups(context.Background())
 	if len(groups) != 1 {
 		t.Fatalf("expected only the healthy PF group, got %v", groupNames(groups))
 	}
