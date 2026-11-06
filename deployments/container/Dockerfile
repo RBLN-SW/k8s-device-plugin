@@ -34,10 +34,10 @@ RUN GOFLAGS=-buildvcs=false make PREFIX=/artifacts VERSION="$VERSION" GOARCH="$T
 
 FROM ${BASE_IMAGE}
 
-# Refresh runtime OpenSSL security fixes even when the Ubuntu base image lags
-# behind the package archive (CVE-2026-84782: libssl3 >= 3.0.2-0ubuntu1.30).
+# Refresh runtime security fixes when the Ubuntu base image lags behind the
+# package archive.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade libssl3 \
+    && apt-get install -y --no-install-recommends --only-upgrade apt libapt-pkg6.0 libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
 LABEL io.k8s.display-name="Rebellions NPU Device Plugin"

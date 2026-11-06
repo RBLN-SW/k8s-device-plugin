@@ -117,7 +117,7 @@ func newTracingTestPlugin(t *testing.T) (*ResourcePlugin, string) {
 	}
 
 	plugin := NewResourcePlugin(
-		consts.AtomResourceName,
+		consts.GenericResourceName,
 		filepath.Join(t.TempDir(), "rbln.sock"),
 		filepath.Join(t.TempDir(), "kubelet.sock"),
 		cdi,

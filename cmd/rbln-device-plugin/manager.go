@@ -136,7 +136,7 @@ func (m *Manager) restart(ctx context.Context) error {
 
 func (m *Manager) reconcile(ctx context.Context) error {
 	start := time.Now()
-	groups := discoverDeviceGroups(ctx, m.config.flags.useGenericResourceName)
+	groups := discoverDeviceGroups(ctx)
 	discovered := 0
 	for _, group := range groups {
 		discovered += len(group.Devices)

@@ -23,7 +23,6 @@ type Flags struct {
 	cdiRoot                 string
 	kubeletDevicePluginPath string
 	healthcheckPort         int
-	useGenericResourceName  bool
 	deviceScanInterval      time.Duration
 	otlpEndpoint            string
 }
@@ -81,13 +80,6 @@ func newApp(logSettings logging.Settings) *cli.App {
 			Destination: &flags.healthcheckPort,
 			EnvVars:     []string{"HEALTHCHECK_PORT"},
 		},
-		&cli.BoolFlag{
-			Name:        "use-generic-resource-name",
-			Usage:       "Expose devices as rebellions.ai/npu instead of legacy rebellions.ai/ATOM or rebellions.ai/REBEL resources.",
-			Value:       true,
-			Destination: &flags.useGenericResourceName,
-			EnvVars:     []string{"USE_GENERIC_RESOURCE_NAME"},
-		},
 		&cli.DurationFlag{
 			Name:        "device-scan-interval",
 			Usage:       "Polling interval used to refresh the device inventory.",
@@ -140,7 +132,6 @@ func Run(ctx context.Context, config *Config) error {
 		"cdiRoot", config.flags.cdiRoot,
 		"kubeletDevicePluginPath", config.flags.kubeletDevicePluginPath,
 		"healthcheckPort", config.flags.healthcheckPort,
-		"useGenericResourceName", config.flags.useGenericResourceName,
 		"deviceScanInterval", config.flags.deviceScanInterval.String(),
 	)
 

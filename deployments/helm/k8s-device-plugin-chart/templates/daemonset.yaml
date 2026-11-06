@@ -54,8 +54,6 @@ spec:
           value: {{ .Values.devicePlugin.cdiRoot | quote }}
         - name: KUBELET_DEVICE_PLUGIN_PATH
           value: {{ .Values.devicePlugin.kubeletDevicePluginPath | quote }}
-        - name: USE_GENERIC_RESOURCE_NAME
-          value: {{ .Values.devicePlugin.useGenericResourceName | quote }}
         - name: HEALTHCHECK_PORT
           value: {{ .Values.devicePlugin.containers.plugin.healthcheckPort | quote }}
         {{- /* Parenthesised access keeps rendering working when a parent chart

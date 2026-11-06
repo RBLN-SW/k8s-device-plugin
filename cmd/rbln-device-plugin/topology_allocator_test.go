@@ -8,6 +8,8 @@ import (
 
 	rblndevice "github.com/rbln-sw/rblnlib-go/pkg/device"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
+
+	"github.com/RBLN-SW/k8s-device-plugin/pkg/consts"
 )
 
 func TestSelectPreferredDeviceIDsPrefersSingleSID(t *testing.T) {
@@ -245,7 +247,7 @@ func TestSelectPreferredDeviceIDsBreaksVFTopologyTiesByID(t *testing.T) {
 }
 
 func testPluginWithDevices(devices map[string]NPUDevice) *ResourcePlugin {
-	return NewResourcePlugin("rebellions.ai/ATOM", filepath.Join(os.TempDir(), "rbln-test.sock"), filepath.Join(os.TempDir(), "kubelet.sock"), nil, devices)
+	return NewResourcePlugin(consts.GenericResourceName, filepath.Join(os.TempDir(), "rbln-test.sock"), filepath.Join(os.TempDir(), "kubelet.sock"), nil, devices)
 }
 
 // SID/NUMA tests must not accidentally use a test runner's physical PCI tree.
