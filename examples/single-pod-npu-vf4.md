@@ -3,7 +3,7 @@
 A pod requesting a single VF on a node partitioned in SR-IOV `vf-4` mode.
 
 Prerequisite: the node must be partitioned in `vf-4` mode (performed by the
-RBLN NPU Operator's partition-manager). Partitioned nodes expose the
+RBLN NPU Operator's device-config-manager). Partitioned nodes expose the
 resource as `rebellions.ai/npu-vf4` (or `rebellions.ai/npu-vf1` in `vf-1`
 mode).
 
