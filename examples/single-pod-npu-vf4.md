@@ -1,11 +1,12 @@
-# Single Pod Requesting SR-IOV VFs (vf-4)
+# Single Pod Requesting SR-IOV VFs (4 VFs per PF)
 
-A pod requesting a single VF on a node partitioned in SR-IOV `vf-4` mode.
+A pod requesting one virtual function (VF) from NPUs configured with four VFs
+per physical function (PF).
 
-Prerequisite: the node must be partitioned in `vf-4` mode (performed by the
-RBLN NPU Operator's partition-manager). Partitioned nodes expose the
-resource as `rebellions.ai/npu-vf4` (or `rebellions.ai/npu-vf1` in `vf-1`
-mode).
+Prerequisite: configure the host NPUs with four VFs per PF and make the VFs
+available through the native NPU driver. The device plugin discovers these
+VFs and advertises them as `rebellions.ai/npu-vf4`. With one VF per PF, it
+advertises `rebellions.ai/npu-vf1` instead.
 
 ## Apply
 
