@@ -36,7 +36,7 @@ func startHealthcheck(port int) (*healthServer, error) {
 		return nil, fmt.Errorf("listen for healthcheck service at %s: %w", addr, err)
 	}
 
-	server := grpc.NewServer()
+	server := grpc.NewServer() // nosemgrep: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection -- kubelet gRPC probes cannot use TLS
 	health := &healthServer{
 		server:   server,
 		listener: listener,
