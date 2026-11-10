@@ -78,7 +78,7 @@ func (p *ResourcePlugin) Start(ctx context.Context) error {
 		return fmt.Errorf("listen on %s: %w", p.socketPath, err)
 	}
 
-	server := grpc.NewServer()
+	server := grpc.NewServer() // nosemgrep: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection -- kubelet plugin API over a local unix socket
 	pluginapi.RegisterDevicePluginServer(server, p)
 
 	p.listener = lis
