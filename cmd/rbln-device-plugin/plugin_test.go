@@ -134,12 +134,16 @@ func TestUpdateDevicesStaysSilentWithoutChanges(t *testing.T) {
 }
 
 func TestUpdateDevicesReportsStateChangeWithCurrentCounts(t *testing.T) {
+	root := setupStatusRoot(t)
+	writeSysfsAttr(t, root, "rbln0", "status", "0")
+	writeSysfsAttr(t, root, "rbln1", "status", "0")
 	buf := captureLogs(t, slog.LevelInfo)
 	plugin := newTestPlugin(t, map[string]NPUDevice{
 		"rbln0": inventoryDevice("rbln0", pluginapi.Healthy, "READY"),
 		"rbln1": inventoryDevice("rbln1", pluginapi.Healthy, "READY"),
 	})
 
+	writeSysfsAttr(t, root, "rbln1", "status", "4")
 	plugin.UpdateDevices(map[string]NPUDevice{
 		"rbln0": inventoryDevice("rbln0", pluginapi.Healthy, "READY"),
 		"rbln1": inventoryDevice("rbln1", pluginapi.Unhealthy, "FAULT"),
@@ -202,6 +206,8 @@ func TestUpdateDevicesReportsAppearanceAndDisappearance(t *testing.T) {
 // later, so it must not be reported at a level an operator alerting on warn
 // filters away.
 func TestUpdateDevicesReportsUnhealthyAppearanceAtWarn(t *testing.T) {
+	root := setupStatusRoot(t)
+	writeSysfsAttr(t, root, "rbln0", "status", "4")
 	buf := captureLogs(t, slog.LevelInfo)
 	plugin := newTestPlugin(t, map[string]NPUDevice{})
 

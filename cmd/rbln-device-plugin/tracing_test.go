@@ -74,14 +74,19 @@ func TestAllocateEmitsSpans(t *testing.T) {
 
 	t.Run("failure marks spans as errored", func(t *testing.T) {
 		plugin, _ := newTracingTestPlugin(t)
+		// Fail after the request-wide health preflight so this exercises both
+		// the container and parent error spans.
+		device := plugin.devices["rbln0"]
+		device.Info.PCIBusID = ""
+		plugin.devices["rbln0"] = device
 
 		before := len(recorder.Ended())
 		if _, err := plugin.Allocate(context.Background(), &pluginapi.AllocateRequest{
 			ContainerRequests: []*pluginapi.ContainerAllocateRequest{
-				{DevicesIds: []string{"ghost"}},
+				{DevicesIds: []string{"rbln0"}},
 			},
 		}); err == nil {
-			t.Fatalf("expected allocate to fail for an unmanaged device")
+			t.Fatalf("expected allocate to fail for a missing PCI bus ID")
 		}
 		spans := recorder.Ended()[before:]
 
