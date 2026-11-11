@@ -47,17 +47,17 @@ jobs:
   lint:
     needs: pr-title-validation
     uses: ./.github/workflows/lint.yaml
-    secrets: inherit
   manifests-check:
     needs: pr-title-validation
     uses: ./.github/workflows/manifests.check.yaml
-    secrets: inherit
   unit-tests:
     needs: pr-title-validation
     uses: ./.github/workflows/go-tests.yaml
   image-scan:
     needs: [lint, manifests-check, unit-tests]
     uses: ./.github/workflows/image-scan.yaml
-    secrets: inherit
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
     with:
       fail-on-findings: true

@@ -52,26 +52,37 @@ jobs:
         uses: docker/setup-buildx-action@v3
       - name: Login to registry
         shell: bash
+        env:
+          REGISTRY: ${{ inputs.registry }}
+          REGISTRY_ID: ${{ secrets.registry_id }}
+          REGISTRY_PASSWORD: ${{ secrets.registry_password }}
         run: |
           set -euo pipefail
-          echo "${{ secrets.registry_password }}" | docker login "${{ inputs.registry }}" -u "${{ secrets.registry_id }}" --password-stdin
+          echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_ID" --password-stdin
 
       - name: Build and push image
         shell: bash
+        env:
+          IMAGE_REPOSITORY: ${{ inputs.image_repository }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          PLATFORM: ${{ inputs.platform }}
         run: |
           set -euo pipefail
           make -f deployments/container/Makefile build \
-            IMAGE_NAME="${{ inputs.image_repository }}" \
-            IMAGE_TAG="${{ inputs.image_tag }}" \
-            VERSION="${{ inputs.image_tag }}" \
-            PLATFORM="${{ inputs.platform }}" \
+            IMAGE_NAME="$IMAGE_REPOSITORY" \
+            IMAGE_TAG="$IMAGE_TAG" \
+            VERSION="$IMAGE_TAG" \
+            PLATFORM="$PLATFORM" \
             PUSH_ON_BUILD=true
 
       - name: Tag dev (alias of the immutable commit SHA, main push only)
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: bash
+        env:
+          IMAGE_REPOSITORY: ${{ inputs.image_repository }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
           docker buildx imagetools create \
-            --tag "${{ inputs.image_repository }}:dev" \
-            "${{ inputs.image_repository }}:${{ inputs.image_tag }}"
+            --tag "${IMAGE_REPOSITORY}:dev" \
+            "${IMAGE_REPOSITORY}:${IMAGE_TAG}"
