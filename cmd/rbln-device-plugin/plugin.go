@@ -41,6 +41,9 @@ type ResourcePlugin struct {
 	cdi           *CDIHandler
 	rsdGroupFn    func([]string) (string, error)
 	devices       map[string]NPUDevice
+	// healthHistory is shared by scan and Allocate under mu. It survives a
+	// device's temporary absence, but not destruction of this plugin instance.
+	healthHistory map[string]string
 	updateCh      chan []*pluginapi.Device
 	stopCh        chan struct{}
 	server        *grpc.Server
@@ -49,20 +52,26 @@ type ResourcePlugin struct {
 }
 
 func NewResourcePlugin(resourceName, socketPath, kubeletSocket string, cdi *CDIHandler, devices map[string]NPUDevice) *ResourcePlugin {
-	return &ResourcePlugin{
+	p := &ResourcePlugin{
 		resourceName:  resourceName,
 		socketPath:    socketPath,
 		kubeletSocket: kubeletSocket,
 		// Bound once so every record of this plugin is attributable to its
 		// resource. Safe here because plugins are built after the process
 		// logger is installed, so this captures the configured handler.
-		log:        slog.With("resourceName", resourceName),
-		cdi:        cdi,
-		rsdGroupFn: rsdgroup.RecreateRsdGroup,
-		devices:    cloneDeviceMap(devices),
-		updateCh:   make(chan []*pluginapi.Device, 1),
-		stopCh:     make(chan struct{}),
+		log:           slog.With("resourceName", resourceName),
+		cdi:           cdi,
+		rsdGroupFn:    rsdgroup.RecreateRsdGroup,
+		devices:       cloneDeviceMap(devices),
+		updateCh:      make(chan []*pluginapi.Device, 1),
+		stopCh:        make(chan struct{}),
+		healthHistory: make(map[string]string),
 	}
+	// The instance is not published yet; subsequent reads/updates hold mu.
+	for id, device := range p.devices {
+		p.devices[id] = p.refreshDeviceHealth(id, device)
+	}
+	return p
 }
 
 func (p *ResourcePlugin) Start(ctx context.Context) error {
@@ -124,8 +133,12 @@ func (p *ResourcePlugin) Stop() error {
 
 func (p *ResourcePlugin) UpdateDevices(devices map[string]NPUDevice) {
 	p.mu.Lock()
+	devices = cloneDeviceMap(devices)
+	for id, device := range devices {
+		devices[id] = p.refreshDeviceHealth(id, device)
+	}
 	delta := diffDeviceInventories(p.devices, devices)
-	p.devices = cloneDeviceMap(devices)
+	p.devices = devices
 	current := clonePluginDevices(p.devices)
 	healthy, unhealthy := healthCounts(p.devices)
 	p.mu.Unlock()
@@ -206,24 +219,30 @@ func (p *ResourcePlugin) Allocate(ctx context.Context, request *pluginapi.Alloca
 	))
 	defer span.End()
 
+	// Read status once per requested device before creating any RSD groups or
+	// CDI responses. Reuse the validated snapshot for all containers without
+	// rediscovering inventory or reading status again during allocation.
+	start := time.Now()
+	var requestedIDs []string
+	for _, containerRequest := range request.ContainerRequests {
+		requestedIDs = append(requestedIDs, containerRequest.DevicesIds...)
+	}
+	selected, err := p.selectedDevices(requestedIDs)
+	if err != nil {
+		return nil, p.allocationError(span, requestedIDs, start, err)
+	}
+
 	response := &pluginapi.AllocateResponse{
 		ContainerResponses: make([]*pluginapi.ContainerAllocateResponse, 0, len(request.ContainerRequests)),
 	}
 
 	for _, containerRequest := range request.ContainerRequests {
 		start := time.Now()
-		containerResponse, err := p.allocateContainer(ctx, containerRequest.DevicesIds)
+		count := len(containerRequest.DevicesIds)
+		containerResponse, err := p.allocateContainer(ctx, containerRequest.DevicesIds, selected[:count])
+		selected = selected[count:]
 		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(otelcodes.Error, "container allocation failed")
-			// durationMs separates a rejected request from one that burned the
-			// kubelet's Allocate deadline waiting on a device node.
-			p.log.Error("Container allocation failed",
-				"err", err,
-				"deviceIDs", containerRequest.DevicesIds,
-				"durationMs", time.Since(start).Milliseconds(),
-			)
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return nil, p.allocationError(span, containerRequest.DevicesIds, start, err)
 		}
 		if rdsDevicePresent() {
 			annotations, err := p.cdi.RDSAnnotations(containerResponse.Annotations)
@@ -237,6 +256,19 @@ func (p *ResourcePlugin) Allocate(ctx context.Context, request *pluginapi.Alloca
 	}
 
 	return response, nil
+}
+
+func (p *ResourcePlugin) allocationError(span trace.Span, deviceIDs []string, start time.Time, err error) error {
+	span.RecordError(err)
+	span.SetStatus(otelcodes.Error, "container allocation failed")
+	// durationMs separates a rejected request from one that burned the
+	// kubelet's Allocate deadline waiting on a device node.
+	p.log.Error("Container allocation failed",
+		"err", err,
+		"deviceIDs", deviceIDs,
+		"durationMs", time.Since(start).Milliseconds(),
+	)
+	return status.Error(codes.InvalidArgument, err.Error())
 }
 
 func (p *ResourcePlugin) GetPreferredAllocation(_ context.Context, request *pluginapi.PreferredAllocationRequest) (*pluginapi.PreferredAllocationResponse, error) {
@@ -268,7 +300,8 @@ func (p *ResourcePlugin) GetPreferredAllocation(_ context.Context, request *plug
 	return response, nil
 }
 
-func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []string) (*pluginapi.ContainerAllocateResponse, error) {
+// allocateContainer uses the device snapshot already validated by Allocate.
+func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []string, selected []NPUDevice) (*pluginapi.ContainerAllocateResponse, error) {
 	_, span := tracer.Start(ctx, "allocateContainer", trace.WithAttributes(
 		attribute.String(attrResourceName, p.resourceName),
 		attribute.StringSlice(attrDeviceIDs, deviceIDs),
@@ -289,11 +322,6 @@ func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []stri
 	}
 	if p.cdi == nil {
 		return nil, recordErr(fmt.Errorf("CDI handler is not configured"))
-	}
-
-	selected, err := p.selectedDevices(deviceIDs)
-	if err != nil {
-		return nil, recordErr(err)
 	}
 
 	busIDs := make([]string, 0, len(selected))
@@ -376,19 +404,38 @@ func rdsDevicePresent() bool {
 }
 
 func (p *ResourcePlugin) selectedDevices(deviceIDs []string) ([]NPUDevice, error) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
+	checked := make(map[string]NPUDevice, len(deviceIDs))
 	selected := make([]NPUDevice, 0, len(deviceIDs))
 	for _, id := range deviceIDs {
+		if device, ok := checked[id]; ok {
+			selected = append(selected, device)
+			continue
+		}
 		device, ok := p.devices[id]
 		if !ok {
 			return nil, fmt.Errorf("resource %s does not manage device %q", p.resourceName, id)
 		}
+		device = p.refreshDeviceHealth(id, device)
+		if device.Health == pluginapi.Unhealthy {
+			return nil, fmt.Errorf("device %q is unhealthy (status %s)", id, device.StatusName)
+		}
+		checked[id] = device
 		selected = append(selected, device)
 	}
 
 	return selected, nil
+}
+
+// refreshDeviceHealth requires mu, except during construction. Keep allocation
+// observations in history without changing the last advertised snapshot: the
+// next scan reports/logs the transition through the usual update path.
+func (p *ResourcePlugin) refreshDeviceHealth(id string, device NPUDevice) NPUDevice {
+	device.Health, device.StatusName = healthForDevice(device.Info.Name, p.healthHistory[id])
+	p.healthHistory[id] = device.Health
+	return device
 }
 
 func (p *ResourcePlugin) availableDevices(deviceIDs []string) (map[string]NPUDevice, error) {

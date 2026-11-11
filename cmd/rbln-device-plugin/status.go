@@ -11,12 +11,14 @@ import (
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
+// Device lifecycle values mirror rbln_dev_status and rblnmlDeviceStatus_t.
 const (
-	deviceStatusReady  = 0
-	deviceStatusBusy   = 1
-	deviceStatusInit   = 2
-	deviceStatusFault  = 3
-	deviceStatusFinish = 4
+	deviceStatusReady   = 0
+	deviceStatusBusy    = 1
+	deviceStatusProbing = 2
+	deviceStatusInit    = 3
+	deviceStatusFault   = 4
+	deviceStatusFinish  = 5
 )
 
 // deviceStatusUnreadable stands in for the status name when sysfs cannot be
@@ -25,8 +27,7 @@ const deviceStatusUnreadable = "UNREADABLE"
 
 var rebellionsSysfsClassPath = "/sys/class/rebellions"
 
-// TODO: The device status is currently read directly from sysfs; switch to
-// reading it through go-rbln-ml (or similar) once its status API is available.
+// TODO: Replace direct sysfs reads with go-rbln-ml's status API.
 func readDeviceStatus(deviceName string) (int, error) {
 	statusPath := filepath.Join(rebellionsSysfsClassPath, deviceName, "status")
 	raw, err := os.ReadFile(statusPath)
@@ -40,14 +41,15 @@ func readDeviceStatus(deviceName string) (int, error) {
 	return status, nil
 }
 
-// TODO: A future KMD version inserts a PROBING state at value 2, shifting
-// INIT/FAULT/FINISH to 3/4/5 — update this mapping once that version ships.
+// deviceStatusName names raw kernel lifecycle states for diagnostics.
 func deviceStatusName(status int) string {
 	switch status {
 	case deviceStatusReady:
 		return "READY"
 	case deviceStatusBusy:
 		return "BUSY"
+	case deviceStatusProbing:
+		return "PROBING"
 	case deviceStatusInit:
 		return "INIT"
 	case deviceStatusFault:
@@ -64,19 +66,19 @@ func deviceStatusName(status int) string {
 // interval for as long as a device stays unhealthy. The manager reports health
 // as state *changes* instead (see ResourcePlugin.UpdateDevices).
 //
-// An unreadable status fails open (Healthy) so a transient sysfs error cannot
-// drain the node's allocatable devices; the read error itself is only
-// interesting while debugging.
-func healthForDevice(deviceName string) (health, statusName string) {
+// An unreadable status preserves a known Unhealthy state. Without an unresolved
+// fault, retain the compatibility default for drivers/VFs with no status file.
+// Only an observed READY clears an Unhealthy state. The caller serializes the
+// read and history update with ResourcePlugin.mu.
+func healthForDevice(deviceName, previousHealth string) (health, statusName string) {
 	status, err := readDeviceStatus(deviceName)
 	if err != nil {
-		// SR-IOV VFs may not expose a status file under
-		// /sys/class/rebellions at all (unverified on real hardware); this
-		// read-failure default then means such VFs are always reported
-		// Healthy. Revisit the default once VF status semantics are
-		// confirmed.
-		slog.Debug("Failed to read device status; assuming healthy", "err", err, "device", deviceName)
-		return pluginapi.Healthy, deviceStatusUnreadable
+		health = pluginapi.Healthy
+		if previousHealth == pluginapi.Unhealthy {
+			health = pluginapi.Unhealthy
+		}
+		slog.Debug("Failed to read device status; retaining health", "err", err, "device", deviceName, "health", health)
+		return health, deviceStatusUnreadable
 	}
 
 	if status == deviceStatusReady {

@@ -26,8 +26,12 @@ func TestHealthForDevice(t *testing.T) {
 	}{
 		{name: "ready", device: "rbln0", raw: "0\n", wantHealth: pluginapi.Healthy, wantStatus: "READY"},
 		{name: "busy", device: "rbln1", raw: "1", wantHealth: pluginapi.Unhealthy, wantStatus: "BUSY"},
-		{name: "fault", device: "rbln2", raw: "3", wantHealth: pluginapi.Unhealthy, wantStatus: "FAULT"},
+		{name: "probing", device: "rbln8", raw: "2", wantHealth: pluginapi.Unhealthy, wantStatus: "PROBING"},
+		{name: "init", device: "rbln5", raw: "3", wantHealth: pluginapi.Unhealthy, wantStatus: "INIT"},
+		{name: "fault", device: "rbln2", raw: "4", wantHealth: pluginapi.Unhealthy, wantStatus: "FAULT"},
+		{name: "finish", device: "rbln6", raw: "5", wantHealth: pluginapi.Unhealthy, wantStatus: "FINISH"},
 		{name: "unknown value", device: "rbln3", raw: "9", wantHealth: pluginapi.Unhealthy, wantStatus: "UNKNOWN(9)"},
+		{name: "negative value", device: "rbln7", raw: "-1", wantHealth: pluginapi.Unhealthy, wantStatus: "UNKNOWN(-1)"},
 		// A garbled status file must not drain allocatable devices.
 		{name: "unparsable", device: "rbln4", raw: "n/a", wantHealth: pluginapi.Healthy, wantStatus: deviceStatusUnreadable},
 	}
@@ -42,7 +46,7 @@ func TestHealthForDevice(t *testing.T) {
 				t.Fatalf("write status: %v", err)
 			}
 
-			health, status := healthForDevice(tc.device)
+			health, status := healthForDevice(tc.device, "")
 			if health != tc.wantHealth || status != tc.wantStatus {
 				t.Fatalf("healthForDevice(%q) = (%q, %q), want (%q, %q)",
 					tc.device, health, status, tc.wantHealth, tc.wantStatus)
@@ -51,12 +55,20 @@ func TestHealthForDevice(t *testing.T) {
 	}
 }
 
+func setupStatusRoot(t *testing.T) string {
+	t.Helper()
+	original := rebellionsSysfsClassPath
+	t.Cleanup(func() { rebellionsSysfsClassPath = original })
+	rebellionsSysfsClassPath = t.TempDir()
+	return rebellionsSysfsClassPath
+}
+
 func TestHealthForDeviceFailsOpenWhenStatusIsMissing(t *testing.T) {
 	original := rebellionsSysfsClassPath
 	t.Cleanup(func() { rebellionsSysfsClassPath = original })
 	rebellionsSysfsClassPath = t.TempDir()
 
-	health, status := healthForDevice("rbln404")
+	health, status := healthForDevice("rbln404", "")
 	if health != pluginapi.Healthy {
 		t.Fatalf("health = %q, want %q: an unreadable status must not remove capacity", health, pluginapi.Healthy)
 	}
@@ -73,13 +85,13 @@ func TestHealthForDeviceKeepsReadFailureBelowInfo(t *testing.T) {
 	rebellionsSysfsClassPath = t.TempDir()
 
 	buf := captureLogs(t, slog.LevelInfo)
-	healthForDevice("rbln404")
+	healthForDevice("rbln404", "")
 	if buf.Len() != 0 {
 		t.Fatalf("status read failure leaked into the info stream: %s", buf.String())
 	}
 
 	debugBuf := captureLogs(t, slog.LevelDebug)
-	healthForDevice("rbln404")
+	healthForDevice("rbln404", "")
 	records := decodeRecords(t, debugBuf)
 	if len(records) != 1 {
 		t.Fatalf("expected 1 debug record, got %d: %s", len(records), debugBuf.String())

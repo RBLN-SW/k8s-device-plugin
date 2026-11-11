@@ -79,6 +79,51 @@ health, and updates the resources advertised to kubelet. PFs hosting VFs are
 excluded from advertisement; their supported VFs are advertised instead.
 Use `--device-scan-interval` or `DEVICE_SCAN_INTERVAL` to override the interval.
 
+### Device status and allocation safety
+
+The plugin reads `/sys/class/rebellions/<device>/status`. `READY` (`0`) is
+Healthy; `BUSY` (`1`), `PROBING` (`2`), `INIT` (`3`), `FAULT` (`4`), `FINISH`
+(`5`), and unknown numeric values are Unhealthy. Logs and allocation errors use
+these kernel lifecycle names for diagnostics.
+Missing files, read errors, and malformed values are reported as `UNREADABLE`.
+If a device has been observed Unhealthy, these failures keep it Unhealthy
+until a subsequent scan or Allocate actually reads `0`. An unreadable status
+is never logged as recovery from an Unhealthy state. Devices with no unresolved
+Unhealthy observation retain the compatibility default of Healthy when status
+cannot be read, including drivers or VFs that never expose a status file.
+
+Scans maintain the advertised inventory and report health changes through
+ListAndWatch. Allocate performs a final status check to catch faults or recovery
+since the last scan. Both paths share an in-memory health history keyed by device
+ID within each resource plugin instance. The existing device mutex protects
+status reads and history updates, preventing observations from being applied
+out of order.
+
+Before creating any RSD group or CDI response, Allocate reads status once per
+distinct requested device and rejects the request if any checked device is
+Unhealthy. This check only reads the requested status files; it does not run full
+inventory discovery. All containers use the validated snapshot without a second
+status read, including when an ID occurs more than once in the request.
+Allocate observations update the shared history; the next periodic scan publishes
+and logs the resulting inventory through the existing ListAndWatch path.
+
+History survives an individual device's disappearance and reappearance while
+its resource plugin instance remains alive. It is not persisted to disk and
+is lost when that instance is replaced: process/pod restart, kubelet socket
+recreation, or removal and later recreation of the resource plugin all start
+with empty history. After such a reset, an unreadable device is again Healthy
+under the compatibility policy until a numeric non-READY status is observed.
+Device ID reuse within a surviving instance inherits that ID's history until
+READY is read. Full inventory discovery failures still report zero devices
+and can therefore remove resource plugins; their failure policy is unchanged.
+
+Health changes affect new allocations only. The plugin does not evict, restart,
+or revoke devices from running containers. Status polling and the allocation
+check cannot prevent hardware from changing state after the final read; RSD
+creation and the driver status read are not an atomic operation. An error after
+allocation side effects begin can still leave earlier work in place; this
+check does not add allocation rollback.
+
 ## Preferred device allocation
 
 The plugin reads each candidate's `/sys/bus/pci/devices/<BDF>` symlink and builds

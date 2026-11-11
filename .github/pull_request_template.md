@@ -9,8 +9,3 @@
 <!-- A high-level summary of what this PR does. Reference any related issues: “Closes #123” -->
 -
 -
-
-## Technical Details
-<!-- Describe the implementation details. Include links to commits, issues, design docs if applicable. -->
--
--

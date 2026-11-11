@@ -77,11 +77,10 @@ func discoverDeviceGroups(ctx context.Context) map[string]DeviceGroup {
 				Devices:      make(map[string]NPUDevice),
 			}
 		}
-		health, statusName := healthForDevice(device.Name)
+		// Status is sampled by ResourcePlugin under its device lock so scans
+		// and Allocate cannot apply observations out of order.
 		group.Devices[device.Name] = NPUDevice{
 			Info:          device,
-			Health:        health,
-			StatusName:    statusName,
 			ParentPFBusID: sriov.parentPFBusID,
 		}
 		groups[resourceName] = group
