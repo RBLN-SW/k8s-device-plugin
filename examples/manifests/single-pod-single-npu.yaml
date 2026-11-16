@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rbln-device-plugin-example
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: npu-pod
+  namespace: rbln-device-plugin-example
+spec:
+  restartPolicy: Never
+  containers:
+    - name: workload
+      image: ubuntu:22.04
+      command: ["sleep", "infinity"]
+      resources:
+        limits:
+          rebellions.ai/npu: 1
