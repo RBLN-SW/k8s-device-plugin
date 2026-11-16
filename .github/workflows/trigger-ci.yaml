@@ -15,10 +15,8 @@ permissions:
 jobs:
   lint:
     uses: ./.github/workflows/lint.yaml
-    secrets: inherit
   manifests-check:
     uses: ./.github/workflows/manifests.check.yaml
-    secrets: inherit
   unit-tests:
     uses: ./.github/workflows/go-tests.yaml
   image-build-push:

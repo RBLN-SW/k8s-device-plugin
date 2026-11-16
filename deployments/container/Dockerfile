@@ -52,4 +52,5 @@ LABEL description="See summary"
 
 COPY --from=build /artifacts/rbln-device-plugin /usr/bin/rbln-device-plugin
 
+# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint -- privileged device plugin writes host /dev, CDI and kubelet socket paths
 ENTRYPOINT ["/usr/bin/rbln-device-plugin"]
