@@ -1,351 +1,61 @@
 # RBLN Device Plugin
 
-`k8s-device-plugin` is a Kubernetes device plugin for Rebellions NPU devices.
-It discovers locally available NPUs, exposes them through the kubelet device plugin
-API, and prepares container runtime annotations for CDI-based integration.
+**Request Rebellions NPUs from Kubernetes Pods.**
 
-The plugin uses fixed resource names for all Rebellions device families:
+[Get started](#get-started) · [Guides](#guides) · [Examples](examples/README.md) · [Releases](https://github.com/RBLN-SW/k8s-device-plugin/releases)
 
-- `rebellions.ai/npu` for non-partitioned physical functions
-- `rebellions.ai/npu-vf1` / `rebellions.ai/npu-vf4` for SR-IOV virtual
-  functions on partitioned REBEL nodes (see below)
+The device plugin makes NPUs available as Kubernetes resources. A Pod requests
+an NPU through `resources.limits`, and the container runtime makes the allocated
+device available inside the container.
 
-## Quick Start
+## Get started
 
-### Option 1: Install Through RBLN NPU Operator
+1. [Install the NPU Operator](https://docs.rbln.ai/latest/software/system_management/kubernetes/install_npu_operator.html)
+   with the Device Plugin and Container Toolkit enabled.
+2. [Run a Pod with one NPU](examples/single-pod-single-npu.md).
+3. Confirm that the Pod is Ready and can access its NPU device.
 
-If your cluster is managed through the RBLN NPU Operator, install the operator first:
+If the operator already manages the plugin, use that deployment for the examples.
+For a separate component deployment, follow the [standalone chart guide](docs/guides/deploy-standalone.md).
 
-```bash
-helm repo add rebellions https://rbln-sw.github.io/rbln-npu-operator
-helm repo update
+## Request an NPU
 
-helm install --wait --generate-name \
-  -n rbln-system --create-namespace \
-  rebellions/rbln-npu-operator
+Add this fragment to a Pod's container specification:
+
+```yaml
+resources:
+  limits:
+    rebellions.ai/npu: 1
 ```
 
-### Option 2: Install This Device Plugin Chart Directly
+The [complete example](examples/single-pod-single-npu.md) includes setup,
+verification, and cleanup. Partitioned devices expose `rebellions.ai/npu-vf1` or
+`rebellions.ai/npu-vf4`. Unpartitioned devices on the same node continue to expose
+`rebellions.ai/npu`.
 
-1. Build and publish the image:
+## Guides
 
-```bash
-make -f deployments/container/Makefile build \
-  IMAGE_NAME=<registry>/k8s-device-plugin \
-  VERSION=<tag> \
-  PUSH_ON_BUILD=true
-```
+| I want to… | Guide |
+| --- | --- |
+| Run one Pod with two NPUs | [Request two NPUs](examples/single-pod-double-npu.md) |
+| Give each of two Pods an NPU | [Run two Pods](examples/two-pods-one-npu-each.md) |
+| Request an SR-IOV virtual function | [Use partitioned NPUs](examples/single-pod-npu-vf4.md) |
+| Schedule by NPU family | [Choose a node](https://docs.rbln.ai/latest/software/system_management/kubernetes/tutorials/find_and_schedule.html) |
+| Configure runtime integration or allocation tracing | [Configure the plugin](https://docs.rbln.ai/latest/software/system_management/kubernetes/device_plugin.html) |
+| Investigate a Pending or stuck Pod | [Diagnose allocation](docs/guides/troubleshoot-allocation.md) |
+| Change logs or component settings | [Configuration reference](docs/reference/configuration.md) |
 
-2. Install the Helm chart from this repository:
+For allocation through ResourceClaims, see the [RBLN DRA Driver](https://github.com/RBLN-SW/rbln-k8s-dra-driver).
+The operator supports DRA and the Device Plugin as alternative allocation methods.
 
-```bash
-helm upgrade --install k8s-device-plugin \
-  ./deployments/helm/k8s-device-plugin-chart \
-  -n k8s-device-plugin \
-  --create-namespace \
-  --set image.repository=<registry>/k8s-device-plugin \
-  --set image.tag=<tag>
-```
+## Development
 
-3. Verify the rollout:
+See [Contributing](CONTRIBUTING.md) to build, test, and validate a change.
+Use docs and examples from the Git tag matching your deployed
+[release](https://github.com/RBLN-SW/k8s-device-plugin/releases).
 
-```bash
-kubectl -n k8s-device-plugin get daemonset,pods
-kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.allocatable}{"\n"}{end}'
-```
+## Support
 
-Non-partitioned devices appear as `rebellions.ai/npu`. Partitioned devices
-appear as `rebellions.ai/npu-vf1` or `rebellions.ai/npu-vf4`.
+Report bugs and feature requests in [GitHub issues](https://github.com/RBLN-SW/k8s-device-plugin/issues).
 
-The chart is named `k8s-device-plugin-chart`; release workflows publish it to
-`<registry>/k8s-device-plugin-chart:<chart-version>`. The container image uses
-`<registry>/k8s-device-plugin:<image-tag>`.
-
-## Configuration
-
-The binary can be configured with CLI flags or environment variables.
-
-| Flag | Environment variable | Default | Description |
-| --- | --- | --- | --- |
-| `--cdi-root` | `CDI_ROOT` | `/var/run/cdi` | Directory used for CDI spec management |
-| `--kubelet-device-plugin-path` | `KUBELET_DEVICE_PLUGIN_PATH` | `/var/lib/kubelet/device-plugins` | Kubelet device plugin socket directory |
-| `--healthcheck-port` | `HEALTHCHECK_PORT` | `51515` | gRPC healthcheck port; set a negative value to disable it |
-| `--device-scan-interval` | `DEVICE_SCAN_INTERVAL` | `5s` | Polling interval for refreshing the device inventory |
-| `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | (empty) | OTLP gRPC endpoint to export allocation traces to; leave empty to disable tracing |
-
-The plugin scans devices immediately at startup and then every 5 seconds by
-default. Each scan refreshes PF/VF inventory, SR-IOV classification, and device
-health, and updates the resources advertised to kubelet. PFs hosting VFs are
-excluded from advertisement; their supported VFs are advertised instead.
-Use `--device-scan-interval` or `DEVICE_SCAN_INTERVAL` to override the interval.
-
-### Device status and allocation safety
-
-The plugin reads `/sys/class/rebellions/<device>/status`. `READY` (`0`) is
-Healthy; `BUSY` (`1`), `PROBING` (`2`), `INIT` (`3`), `FAULT` (`4`), `FINISH`
-(`5`), and unknown numeric values are Unhealthy. Logs and allocation errors use
-these kernel lifecycle names for diagnostics.
-Missing files, read errors, and malformed values are reported as `UNREADABLE`.
-If a device has been observed Unhealthy, these failures keep it Unhealthy
-until a subsequent scan or Allocate actually reads `0`. An unreadable status
-is never logged as recovery from an Unhealthy state. Devices with no unresolved
-Unhealthy observation retain the compatibility default of Healthy when status
-cannot be read, including drivers or VFs that never expose a status file.
-
-Scans maintain the advertised inventory and report health changes through
-ListAndWatch. Allocate performs a final status check to catch faults or recovery
-since the last scan. Both paths share an in-memory health history keyed by device
-ID within each resource plugin instance. The existing device mutex protects
-status reads and history updates, preventing observations from being applied
-out of order.
-
-Before creating any RSD group or CDI response, Allocate reads status once per
-distinct requested device and rejects the request if any checked device is
-Unhealthy. This check only reads the requested status files; it does not run full
-inventory discovery. All containers use the validated snapshot without a second
-status read, including when an ID occurs more than once in the request.
-Allocate observations update the shared history; the next periodic scan publishes
-and logs the resulting inventory through the existing ListAndWatch path.
-
-History survives an individual device's disappearance and reappearance while
-its resource plugin instance remains alive. It is not persisted to disk and
-is lost when that instance is replaced: process/pod restart, kubelet socket
-recreation, or removal and later recreation of the resource plugin all start
-with empty history. After such a reset, an unreadable device is again Healthy
-under the compatibility policy until a numeric non-READY status is observed.
-Device ID reuse within a surviving instance inherits that ID's history until
-READY is read. Full inventory discovery failures still report zero devices
-and can therefore remove resource plugins; their failure policy is unchanged.
-
-Health changes affect new allocations only. The plugin does not evict, restart,
-or revoke devices from running containers. Status polling and the allocation
-check cannot prevent hardware from changing state after the final read; RSD
-creation and the driver status read are not an atomic operation. An error after
-allocation side effects begin can still leave earlier work in place; this
-check does not add allocation rollback.
-
-## Preferred device allocation
-
-The plugin reads each candidate's `/sys/bus/pci/devices/<BDF>` symlink and builds
-a forest of PCI roots, shared upstream bridges, and NPU endpoints. This works
-for CA22, CA25, and CR13 without product-specific bridge depths. Placement does
-not call `rbln-smi --topo` or read the driver's RSD-filtered `topology` attribute,
-so splitting devices into RSD groups does not hide their PCI relationships.
-Device discovery and RSD group creation still use the existing library.
-
-Selection preserves kubelet's mandatory devices and compares complete device
-combinations, including partial selections within the same SID. The policy is
-lexicographic; lower scores win in this order:
-
-1. Number of selected devices with unknown NUMA, then number of distinct known
-   NUMA nodes. NUMA is evaluated per selected device, not from the first device
-   in a SID group. Missing, invalid, and negative NUMA values are unknown.
-2. Number of distinct SID groups. A valid shared SID is evidence of a shared
-   card. Empty, `N/A`, `unknown`, and all-zero SIDs are treated as separate
-   devices, not as one shared card. SR-IOV VFs group by their parent PF's PCI
-   address instead of SID; the same NUMA and PCI priorities apply.
-3. Number of devices with unreadable PCI paths, then number of device pairs
-   under separate PCI roots. Separate roots have no known common ancestor;
-   the plugin does not invent an inter-root hop count.
-4. Maximum LCA distance among connected pairs, then the sum of those distances.
-   Mandatory devices participate in both metrics. For endpoints A and B,
-   `distance = depth(A) + depth(B) - 2 * depth(LCA(A, B))`.
-5. Lexicographic device ID order for deterministic ties.
-
-NUMA locality takes priority even when keeping devices on one NUMA node uses
-more cards. For example, four available devices on three local cards beat
-a two-card combination spanning NUMA nodes. SID packing then minimizes the
-cards used, and PCI distance minimizes the worst path before the total path
-length. Group fullness or a fixed ID prefix cannot override these priorities.
-Unknown PCI information only affects that device; valid
-paths between the other selected devices remain usable. If all topology
-metadata is absent, allocation still returns the requested number of available
-devices, including the mandatory ones, with stable ID ordering.
-
-For example, consider this PCI tree (all devices initially have distinct SIDs
-and NUMA node 0):
-
-```text
-PCI root A
-├── Root port 0
-│   └── Switch
-│       ├── Bridge A
-│       │   ├── rbln0
-│       │   └── rbln2
-│       └── Bridge B
-│           ├── rbln1
-│           └── rbln3
-└── Root port 1
-    └── rbln4
-PCI root B
-└── Root port
-    └── rbln5
-rbln6: PCI path unavailable
-```
-
-The distances are `d(0,2)=2`, `d(0,1)=4`, and `d(0,4)=6`.
-`rbln0` and `rbln5` belong to separate roots, so their distance is not known.
-
-| Request / changed information | Preferred devices | Reason |
-| --- | --- | --- |
-| Choose 2 | `rbln0, rbln2` | Closest pair; ID order breaks the tie with `rbln1, rbln3` |
-| Choose 2; only 0/2/4 available; 0/4 share a SID | `rbln0, rbln4` | Keep one shared card despite the longer visible PCI path |
-| Include 0, choose 2 from 0/1/2; 2 is on NUMA 1 | `rbln0, rbln1` | Same NUMA takes precedence over the shorter 0–2 PCI path |
-| Choose 2 from 0/1/2 sharing one SID | `rbln0, rbln2` | Compare subsets within the SID instead of taking the first two IDs |
-| Include 6, choose 3 | `rbln6, rbln0, rbln2` | Keep the required device with missing PCI data and optimize the remaining known pair |
-| Include 0, choose 2 from 0/4/5 | `rbln0, rbln4` | A path under one PCI root is preferable to an unmeasured inter-root path |
-| Choose 2 with all SID/NUMA/PCI information missing | `rbln0, rbln1` | Deterministic fallback |
-
-The search uses admissible bounds to skip combinations that cannot improve the
-score; a tree dynamic program bounds the remaining PCI cost without enumerating
-every subset. It does not greedily choose one neighbor at a time. These examples and
-an independent exhaustive comparison are covered by `pci_topology_test.go`.
-In a VM, the tree is the guest's PCI hierarchy. The metric is a locality
-heuristic, not a measurement of physical host distance, bandwidth, or P2P support.
-
-## Observability
-
-The plugin can export NPU allocation traces via OpenTelemetry. When an OTLP
-gRPC endpoint is configured, each kubelet `Allocate` call produces an
-`Allocate` span with a child `allocateContainer` span per container, carrying
-the assigned NPU IDs, PCI bus IDs, and RSD group path. Spans include the service
-name (`service.name`) and the node name (`k8s.node.name`).
-
-Tracing is disabled by default and is strictly best-effort: if the endpoint is
-empty, tracing is a no-op, and if exporter setup fails (e.g. a malformed
-endpoint), the plugin logs a warning and keeps running without tracing rather
-than aborting NPU scheduling on the node.
-
-With the Helm chart, set the endpoint via:
-
-```bash
-helm upgrade --install k8s-device-plugin \
-  ./deployments/helm/k8s-device-plugin-chart \
-  -n k8s-device-plugin \
-  --set devicePlugin.otlpEndpoint=<collector-host>:4317
-```
-
-An endpoint given as `host:port` uses an insecure gRPC connection; pass a full
-URL (e.g. `https://collector:4317`) to use TLS.
-
-Logging is configured separately, through environment variables only — see
-[Logging](#logging).
-
-## Logging
-
-The plugin writes one structured stream to stdout: level-gated JSON by default,
-including gRPC's own records. Nothing else uses stdout — usage errors, `--help`
-and `--version` go to stderr — so a collector can parse every stdout line.
-Two environment variables control it, exposed as the `logging.level` /
-`logging.format` Helm values:
-
-| Variable | Values | Default |
-| --- | --- | --- |
-| `RBLN_DEVICE_PLUGIN_LOG_LEVEL` | `error`, `warning` (or `warn`), `info`, `debug` | `info` |
-| `RBLN_DEVICE_PLUGIN_LOG_FORMAT` | `json`, `text` | `json` |
-
-There are deliberately no CLI flags: the logger is installed before flags are
-parsed, so even a usage error is reported through it. Invalid values fall back to
-the defaults with a warning instead of failing startup.
-
-> When the plugin runs as an operand of the NPU operator, these variables must be
-> set on the operator-managed DaemonSet — this chart's values do not reach it.
-
-Every record carries `ts` (RFC3339Nano), lowercase `level`, `msg`, and the keys
-of the event; errors are always under `err`. Records produced by gRPC itself
-carry `component=grpc`, and `caller` is added at `debug`.
-
-```json
-{"ts":"2026-08-21T09:14:02.113Z","level":"warn","msg":"Device state changed","resourceName":"rebellions.ai/npu","device":"rbln3","health":"Unhealthy","status":"FAULT","previousHealth":"Healthy","previousStatus":"READY","deviceCount":8,"healthyCount":7,"unhealthyCount":1}
-```
-
-### What the default stream tells you
-
-At `info` the stream is a narrative of state, not a heartbeat — a scan that finds
-nothing new logs nothing:
-
-- **Lifecycle** — startup (with version and the resolved
-  configuration), `Registered device plugin with kubelet` plus one
-  `Device exposed` per device, then `Shutdown signal received` (naming the
-  `signal`, so a kubelet drain is distinguishable from a crash-adjacent
-  `SIGQUIT`) and shutdown.
-- **Inventory changes** — `Device appeared in inventory`,
-  `Device disappeared from inventory` (warn), and `Device state changed`. Each
-  carries the resulting `deviceCount` / `healthyCount` / `unhealthyCount`, so one
-  record answers both what changed and what is allocatable now.
-- **Allocation** — `Starting container allocation` and
-  `Completed container allocation`, both with `deviceIDs` and `busIDs`;
-  `Container allocation failed` (error) when a request is rejected. Both
-  terminal records carry `durationMs`, because this handler is what stalls a pod
-  in `ContainerCreating`.
-- **Tracing** — `Distributed tracing enabled` or
-  `Distributed tracing disabled; no OTLP endpoint configured` at startup,
-  `Tracing setup failed; continuing without distributed tracing` (warn) when the
-  exporter cannot be built, and `OpenTelemetry SDK error` (warn,
-  `component=otel`) while the collector is unreachable. Nothing tracing reports
-  rises above warn: it is best-effort, so none of it makes a device or an
-  allocation unusable.
-- **Degraded placement** — `Preferred allocation fallback to kubelet` (warn):
-  allocation still succeeds, but topology-aware selection did not run, so the
-  chosen devices may straddle NUMA nodes or PCI bridges.
-- **Recovery events** — `Detected kubelet socket recreation; restarting device
-  plugins`, `Stopped device plugin for absent resource`,
-  `Device discovery failed; reporting zero devices until it recovers` (error,
-  repeated per scan while the node has no usable devices).
-
-Levels follow one rule: `error` means a device or request is unusable now,
-`warn` means the plugin handled something abnormal, `info` is lifecycle and
-state changes, and `debug` adds per-request flow (device list pushes, RSD group
-recreation, preferred allocation, and gRPC / OpenTelemetry SDK internals). Any record describing a
-device is raised to `warn` when that device is unhealthy — including one that is
-already faulted the first time it is seen — so alerting on `warn` cannot miss
-unusable hardware.
-
-Because a steady node logs nothing, `debug` also carries
-`Reconciled device inventory` once per `--device-scan-interval`: it is how you
-confirm the scan loop is alive and how long a scan takes.
-
-## SR-IOV Partitioned Nodes (REBEL)
-
-REBEL NPUs can be partitioned into SR-IOV virtual functions (supported
-partition modes: `vf-1` and `vf-4`). The plugin detects VFs directly from
-sysfs — no flag or chart value is required — and advertises them as a
-dedicated resource derived from the partition mode:
-
-| Partition mode | Advertised resource | Devices per PF |
-| --- | --- | --- |
-| `vf-1` | `rebellions.ai/npu-vf1` | 1 (all 4 chiplets) |
-| `vf-4` | `rebellions.ai/npu-vf4` | 4 (1 chiplet each) |
-
-Behavior on a partitioned node:
-
-- VF resources are always named `rebellions.ai/npu-vf<N>`.
-- A PF that hosts VFs is not advertised: in the current driver generation it
-  is removed from the compute topology while SR-IOV is enabled, so exposing
-  it would double-count compute capacity.
-- Non-partitioned PFs on the same node use `rebellions.ai/npu`, so mixed
-  nodes advertise both (e.g. `rebellions.ai/npu-vf4` and `rebellions.ai/npu`).
-- PFs with an unsupported VF count are excluded from advertisement and
-  logged as errors.
-- VF allocations create a dedicated RSD group, just like PF allocations.
-  Each container receives that group's node as `/dev/rsd0`, its VF device
-  nodes (e.g. `/dev/rbln0-0`), and the usual CDI runtime annotation.
-
-Prerequisite: partitioning itself is managed outside this plugin. When the
-plugin is deployed through the RBLN NPU Operator, its init container gates
-startup until the node's partition state is ready
-(`/run/rbln/validations/partition-ready`), so VFs already exist by the time
-the plugin scans devices.
-
-See [`examples/single-pod-npu-vf4.md`](examples/single-pod-npu-vf4.md) for a
-pod requesting VFs.
-
-## License
-
-This project is licensed under the Apache License 2.0. See
-[`LICENSE`](LICENSE) for details.
-
-## RC validation
-
-Release candidates are tested through piper using their published images.
-See [RC validation setup and image inputs](docs/rc-validation.md).
+[License](LICENSE)

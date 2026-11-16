@@ -1,14 +1,22 @@
-# Usage Examples
+# Device Plugin examples
 
-This directory contains usage examples for the device plugin.
+Start with one NPU, then choose the allocation pattern you need.
 
-Non-partitioned NPUs always use the fixed resource name `rebellions.ai/npu`.
+## Before you start
 
-On SR-IOV partitioned nodes, use `rebellions.ai/npu-vf1` or
-`rebellions.ai/npu-vf4` depending on the partition mode.
+[Install the Device Plugin and Container Toolkit](https://docs.rbln.ai/latest/software/system_management/kubernetes/install_npu_operator.html)
+and confirm that the node advertises the resource used by your example.
+Use examples from the same release as your deployment.
 
-## Example Scenarios
+| Goal | Guide |
+| --- | --- |
+| Run a first NPU workload | [One Pod, one NPU](single-pod-single-npu.md) |
+| Allocate multiple NPUs to one workload | [One Pod, two NPUs](single-pod-double-npu.md) |
+| Give each workload its own NPU | [Two Pods, one NPU each](two-pods-one-npu-each.md) |
+| Use a partitioned NPU | [One Pod, one VF](single-pod-npu-vf4.md) |
 
-- [Single pod requesting two NPUs](single-pod-double-npu.md)
-- [Two pods requesting one NPU each](two-pods-one-npu-each.md)
-- [Single pod requesting SR-IOV VFs (vf-4)](single-pod-npu-vf4.md)
+Whole NPUs use `rebellions.ai/npu`. Partitioned devices use
+`rebellions.ai/npu-vf1` or `rebellions.ai/npu-vf4`.
+Each guide includes cleanup for the namespace it creates.
+
+[Back to the README](../README.md)
