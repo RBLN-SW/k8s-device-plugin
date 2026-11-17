@@ -1,0 +1,8 @@
+{
+  "repository": "RBLN-SW/k8s-device-plugin",
+  "bundle_id": "f959184e-538d-49c9-9b43-68151af7d00e",
+  "ob_pipeline": "pr-k8s-device-plugin",
+  "timeout_seconds": 10200,
+  "status_context": "[Device Plugin] PR CI",
+  "workflow_file": ".github/workflows/trigger-pr.yaml"
+}
