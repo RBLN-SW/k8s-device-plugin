@@ -1,18 +1,11 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
+	"context"
+	host "github.com/rbln-sw/rblnlib-go/pkg/host/v1"
 )
 
-var (
-	topologyPCISysfsDevicesPath = "/sys/bus/pci/devices"
-	topologyPCIAddressPattern   = regexp.MustCompile(`^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$`)
-	topologyPCIRootPattern      = regexp.MustCompile(`^pci[0-9a-fA-F]{4}:[0-9a-fA-F]{2}$`)
-)
+var topologyPCISysfsDevicesPath = "/sys/bus/pci/devices"
 
 // pciTree is a forest: separate PCI host bridges do not have an invented
 // common parent. Shared ancestors are interned by their canonical sysfs path.
@@ -73,37 +66,11 @@ func newPCITree(devices map[string]NPUDevice) *pciTree {
 // pciDeviceAncestors returns the PCI root, all upstream PCI devices, and the
 // NPU endpoint. The endpoint is a leaf, never a product-specific "bridge index".
 func pciDeviceAncestors(busID string) ([]string, error) {
-	if !topologyPCIAddressPattern.MatchString(busID) {
-		return nil, fmt.Errorf("invalid PCI address %q", busID)
-	}
-	path, err := filepath.EvalSymlinks(filepath.Join(topologyPCISysfsDevicesPath, strings.ToLower(busID)))
+	c, err := host.New(host.Options{PCIDevicesRoot: topologyPCISysfsDevicesPath})
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() || !strings.EqualFold(filepath.Base(path), busID) {
-		return nil, fmt.Errorf("PCI path does not end at device %s", busID)
-	}
-	var ancestors []string
-	current := string(filepath.Separator)
-	for _, segment := range strings.Split(filepath.Clean(path), string(filepath.Separator)) {
-		current = filepath.Join(current, segment)
-		if topologyPCIRootPattern.MatchString(segment) && len(ancestors) == 0 {
-			ancestors = append(ancestors, current)
-		} else if len(ancestors) > 0 {
-			if !topologyPCIAddressPattern.MatchString(segment) {
-				return nil, fmt.Errorf("unexpected component in PCI hierarchy: %s", segment)
-			}
-			ancestors = append(ancestors, current)
-		}
-	}
-	if len(ancestors) < 2 {
-		return nil, fmt.Errorf("PCI root is missing for %s", busID)
-	}
-	return ancestors, nil
+	return c.PCIAncestors(context.Background(), busID)
 }
 
 func (t *pciTree) distance(source, destination string) pciDistance {

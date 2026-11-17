@@ -50,7 +50,7 @@ func TestResourceForDevice(t *testing.T) {
 		},
 		{
 			name:      "plain pf atom",
-			device:    rblndevice.Device{Name: "rbln0", ProductName: "RBLN-CA25"},
+			device:    rblndevice.Device{Name: "rbln0", ProductName: "RBLN-CA25", PCIBusID: "0000:01:00.0"},
 			sriov:     sriovInfo{class: sriovClassNone},
 			expected:  consts.GenericResourceName,
 			advertise: true,
@@ -106,6 +106,10 @@ func TestResourceForDevice(t *testing.T) {
 // The discoverDeviceGroups tests are not parallel: they mutate the shared
 // package-level getDevices seam.
 func TestDiscoverDeviceGroups(t *testing.T) {
+	root := setupSRIOVDiscovery(t)
+	writeSysfsAttr(t, root, "0000:01:00.0", "sriov_numvfs", "0")
+	writeSysfsAttr(t, root, "0000:02:00.0", "sriov_numvfs", "0")
+
 	originalGetDevices := getDevices
 	t.Cleanup(func() {
 		getDevices = originalGetDevices
@@ -113,8 +117,8 @@ func TestDiscoverDeviceGroups(t *testing.T) {
 
 	getDevices = func(context.Context) ([]rblndevice.Device, error) {
 		return []rblndevice.Device{
-			{Name: "rbln0", ProductName: "RBLN-CA25"},
-			{Name: "rbln1", ProductName: "RBLN-CR03"},
+			{Name: "rbln0", ProductName: "RBLN-CA25", PCIBusID: "0000:01:00.0"},
+			{Name: "rbln1", ProductName: "RBLN-CR03", PCIBusID: "0000:02:00.0"},
 		}, nil
 	}
 
@@ -149,6 +153,10 @@ func TestDiscoverDeviceGroupsReportsZeroDevicesOnError(t *testing.T) {
 }
 
 func TestDiscoverDeviceGroupsIncludesUnknownProduct(t *testing.T) {
+	root := setupSRIOVDiscovery(t)
+	writeSysfsAttr(t, root, "0000:01:00.0", "sriov_numvfs", "0")
+	writeSysfsAttr(t, root, "0000:02:00.0", "sriov_numvfs", "0")
+
 	originalGetDevices := getDevices
 	t.Cleanup(func() {
 		getDevices = originalGetDevices
@@ -156,8 +164,8 @@ func TestDiscoverDeviceGroupsIncludesUnknownProduct(t *testing.T) {
 
 	getDevices = func(context.Context) ([]rblndevice.Device, error) {
 		return []rblndevice.Device{
-			{Name: "rbln0", ProductName: "RBLN-CA25"},
-			{Name: "rbln1", ProductName: "RBLN-XX01"},
+			{Name: "rbln0", ProductName: "RBLN-CA25", PCIBusID: "0000:01:00.0"},
+			{Name: "rbln1", ProductName: "RBLN-XX01", PCIBusID: "0000:02:00.0"},
 		}, nil
 	}
 

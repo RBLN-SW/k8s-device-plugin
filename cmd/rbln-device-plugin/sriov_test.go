@@ -1,8 +1,12 @@
 package main
 
 import (
+	"fmt"
+	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -59,11 +63,13 @@ func TestProbeSRIOV(t *testing.T) {
 		},
 		{
 			name:     "device missing from sysfs",
+			wantErr:  true,
 			pciBusID: "0000:ff:00.0",
 			expected: sriovInfo{class: sriovClassNone},
 		},
 		{
 			name:     "empty bus id",
+			wantErr:  true,
 			pciBusID: "",
 			expected: sriovInfo{class: sriovClassNone},
 		},
@@ -149,6 +155,17 @@ func mustMkdirAll(t *testing.T, path string) {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", path, err)
 	}
+	if _, err := system.NormalizePCIAddress(filepath.Base(path)); err == nil {
+		for attr, value := range map[string]string{"vendor": "0x1eff", "class": "0x120000", "device": "0x1220"} {
+			file := filepath.Join(path, attr)
+			if _, err := os.Stat(file); os.IsNotExist(err) {
+				if err := os.WriteFile(file, []byte(value), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+
 }
 
 func writeSysfsAttr(t *testing.T, root, device, attr, content string) {
@@ -157,11 +174,40 @@ func writeSysfsAttr(t *testing.T, root, device, attr, content string) {
 	if err := os.WriteFile(filepath.Join(root, device, attr), []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s/%s: %v", device, attr, err)
 	}
+	if attr == "sriov_numvfs" {
+		n, err := strconv.Atoi(strings.TrimSpace(content))
+		if err != nil || n < 0 {
+			return
+		}
+		links, _ := filepath.Glob(filepath.Join(root, device, "virtfn*"))
+		for _, link := range links {
+			if err := os.Remove(link); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := 0; i < n; i++ {
+			vf := strings.TrimSuffix(device, ".0") + fmt.Sprintf(".%d", i+1)
+			mustMkdirAll(t, filepath.Join(root, vf))
+			parentLink := filepath.Join(root, vf, "physfn")
+			if _, err := os.Lstat(parentLink); os.IsNotExist(err) {
+				if err := os.Symlink("../"+device, parentLink); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink("../"+vf, filepath.Join(root, device, fmt.Sprintf("virtfn%d", i))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
 }
 
 func writeSysfsSymlink(t *testing.T, root, device, name, target string) {
 	t.Helper()
 	mustMkdirAll(t, filepath.Join(root, device))
+	if err := os.Remove(filepath.Join(root, device, name)); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(target, filepath.Join(root, device, name)); err != nil {
 		t.Fatalf("symlink %s/%s: %v", device, name, err)
 	}

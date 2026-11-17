@@ -1,64 +1,24 @@
 package main
 
 import (
-	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-
+	"context"
+	host "github.com/rbln-sw/rblnlib-go/pkg/host/v1"
+	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
+	"log/slog"
+	"path/filepath"
 )
 
-// Device lifecycle values mirror rbln_dev_status and rblnmlDeviceStatus_t.
-const (
-	deviceStatusReady   = 0
-	deviceStatusBusy    = 1
-	deviceStatusProbing = 2
-	deviceStatusInit    = 3
-	deviceStatusFault   = 4
-	deviceStatusFinish  = 5
-)
-
-// deviceStatusUnreadable stands in for the status name when sysfs cannot be
-// read, so an unreadable device is still described by one stable token.
 const deviceStatusUnreadable = "UNREADABLE"
 
 var rebellionsSysfsClassPath = "/sys/class/rebellions"
 
-// TODO: Replace direct sysfs reads with go-rbln-ml's status API.
-func readDeviceStatus(deviceName string) (int, error) {
-	statusPath := filepath.Join(rebellionsSysfsClassPath, deviceName, "status")
-	raw, err := os.ReadFile(statusPath)
+func readDeviceStatus(name string) (system.StateObservation, error) {
+	c, err := host.New(host.Options{RebellionsClassRoot: rebellionsSysfsClassPath, AccelClassRoot: filepath.Join(filepath.Dir(rebellionsSysfsClassPath), "accel")})
 	if err != nil {
-		return 0, err
+		return system.StateObservation{}, err
 	}
-	status, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil {
-		return 0, fmt.Errorf("parse status file %s: %w", statusPath, err)
-	}
-	return status, nil
-}
-
-// deviceStatusName names raw kernel lifecycle states for diagnostics.
-func deviceStatusName(status int) string {
-	switch status {
-	case deviceStatusReady:
-		return "READY"
-	case deviceStatusBusy:
-		return "BUSY"
-	case deviceStatusProbing:
-		return "PROBING"
-	case deviceStatusInit:
-		return "INIT"
-	case deviceStatusFault:
-		return "FAULT"
-	case deviceStatusFinish:
-		return "FINISH"
-	default:
-		return fmt.Sprintf("UNKNOWN(%d)", status)
-	}
+	return c.ReadNamedState(context.Background(), name)
 }
 
 // healthForDevice deliberately does not log its outcome: it runs for every
@@ -81,9 +41,9 @@ func healthForDevice(deviceName, previousHealth string) (health, statusName stri
 		return health, deviceStatusUnreadable
 	}
 
-	if status == deviceStatusReady {
-		return pluginapi.Healthy, deviceStatusName(status)
+	if status.State == system.StateReady {
+		return pluginapi.Healthy, status.String()
 	}
 
-	return pluginapi.Unhealthy, deviceStatusName(status)
+	return pluginapi.Unhealthy, status.String()
 }

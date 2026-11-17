@@ -90,7 +90,8 @@ func TestAllocateReturnsRuntimeAnnotationAndDeviceSpecs(t *testing.T) {
 			"rbln0": testDevice("null", "sid-a", "0000:06:00.0", "0"),
 		},
 	)
-	plugin.rsdGroupFn = func([]string) (string, error) { return rsdPath, nil }
+	plugin.resolveNodes = testNativeNodes
+	plugin.rsdGroupFn = func(_ context.Context, _ []string) (string, error) { return rsdPath, nil }
 
 	response, err := plugin.Allocate(context.Background(), &pluginapi.AllocateRequest{
 		ContainerRequests: []*pluginapi.ContainerAllocateRequest{

@@ -334,7 +334,8 @@ func TestAllocateVFCreatesRSDGroup(t *testing.T) {
 		},
 	)
 	var rsdBusIDs []string
-	plugin.rsdGroupFn = func(busIDs []string) (string, error) {
+	plugin.resolveNodes = testNativeNodes
+	plugin.rsdGroupFn = func(_ context.Context, busIDs []string) (string, error) {
 		rsdBusIDs = busIDs
 		return rsdPath, nil
 	}
