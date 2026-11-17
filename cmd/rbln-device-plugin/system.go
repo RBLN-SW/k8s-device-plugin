@@ -28,7 +28,7 @@ func getSystemDevices(ctx context.Context) ([]rblndevice.Device, error) {
 }
 
 func recreateSystemRSDGroup(ctx context.Context, busIDs []string) (string, error) {
-	c, err := smi.New(smi.Options{})
+	c, err := smi.New(smi.Options{ReplaceIntersectingGroups: true})
 	if err != nil {
 		return "", err
 	}
