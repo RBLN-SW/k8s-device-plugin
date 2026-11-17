@@ -4,5 +4,11 @@
   "ob_pipeline": "pr-k8s-device-plugin",
   "timeout_seconds": 10200,
   "status_context": "[Device Plugin] PR CI",
-  "workflow_file": ".github/workflows/trigger-pr.yaml"
+  "workflow_file": ".github/workflows/trigger-pr.yaml",
+  "gate_jobs": [
+    "lint",
+    "manifests-check",
+    "pr-title-validation",
+    "unit-tests"
+  ]
 }
