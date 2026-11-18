@@ -12,7 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rbln-sw/rblnlib-go/pkg/rsdgroup"
+	host "github.com/rbln-sw/rblnlib-go/pkg/host/v1"
+	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 	"go.opentelemetry.io/otel/attribute"
 	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -27,7 +28,6 @@ const (
 	deviceNodePollTimeout  = 5 * time.Second
 	deviceNodePollInterval = 100 * time.Millisecond
 	registerTimeout        = 10 * time.Second
-	rdsDeviceGlob          = "/dev/rblnfs*"
 )
 
 type ResourcePlugin struct {
@@ -39,7 +39,8 @@ type ResourcePlugin struct {
 	kubeletSocket string
 	log           *slog.Logger
 	cdi           *CDIHandler
-	rsdGroupFn    func([]string) (string, error)
+	rsdGroupFn    func(context.Context, []string) (string, error)
+	resolveNodes  func(context.Context, string) ([]system.DeviceNode, error)
 	devices       map[string]NPUDevice
 	// healthHistory is shared by scan and Allocate under mu. It survives a
 	// device's temporary absence, but not destruction of this plugin instance.
@@ -61,7 +62,8 @@ func NewResourcePlugin(resourceName, socketPath, kubeletSocket string, cdi *CDIH
 		// logger is installed, so this captures the configured handler.
 		log:           slog.With("resourceName", resourceName),
 		cdi:           cdi,
-		rsdGroupFn:    rsdgroup.RecreateRsdGroup,
+		rsdGroupFn:    recreateSystemRSDGroup,
+		resolveNodes:  nativeSystemNodes,
 		devices:       cloneDeviceMap(devices),
 		updateCh:      make(chan []*pluginapi.Device, 1),
 		stopCh:        make(chan struct{}),
@@ -344,7 +346,7 @@ func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []stri
 	// VFs get their own RSD group exactly like PFs (confirmed with SSW): the
 	// runtime requires a dedicated, freshly created group node — never the
 	// shared default rsd0 — for VF workloads too.
-	hostRsdPath, err := p.rsdGroupFn(busIDs)
+	hostRsdPath, err := p.rsdGroupFn(ctx, busIDs)
 	if err != nil {
 		return nil, recordErr(fmt.Errorf("recreate RSD group for bus IDs %v: %w", busIDs, err))
 	}
@@ -355,7 +357,7 @@ func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []stri
 		"durationMs", time.Since(start).Milliseconds(),
 	)
 
-	deviceSpecs, err := deviceSpecsForDevices(selected, hostRsdPath)
+	deviceSpecs, err := p.deviceSpecsForDevices(ctx, selected, hostRsdPath)
 	if err != nil {
 		return nil, recordErr(err)
 	}
@@ -383,24 +385,12 @@ func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []stri
 }
 
 func rdsDevicePresent() bool {
-	paths, err := filepath.Glob(rdsDeviceGlob)
+	c, err := host.New(host.Options{})
 	if err != nil {
 		return false
 	}
-	found := make([]string, 0, len(paths))
-	for _, path := range paths {
-		info, err := os.Stat(path)
-		if err == nil && !info.IsDir() {
-			found = append(found, path)
-		}
-	}
-
-	if len(found) == 0 {
-		return false
-	}
-
-	slog.Debug("Found RDS device nodes", "paths", found)
-	return true
+	nodes, err := c.RDSNodes(context.Background())
+	return err == nil && len(nodes) > 0
 }
 
 func (p *ResourcePlugin) selectedDevices(deviceIDs []string) ([]NPUDevice, error) {
@@ -534,7 +524,7 @@ func cloneDeviceMap(devices map[string]NPUDevice) map[string]NPUDevice {
 	return cloned
 }
 
-func deviceSpecsForDevices(devices []NPUDevice, hostRsdPath string) ([]*pluginapi.DeviceSpec, error) {
+func (p *ResourcePlugin) deviceSpecsForDevices(ctx context.Context, devices []NPUDevice, hostRsdPath string) ([]*pluginapi.DeviceSpec, error) {
 	specs := make([]*pluginapi.DeviceSpec, 0, len(devices)+1)
 
 	if hostRsdPath != "" {
@@ -546,12 +536,17 @@ func deviceSpecsForDevices(devices []NPUDevice, hostRsdPath string) ([]*pluginap
 	}
 
 	for _, device := range devices {
-		devicePath := fmt.Sprintf("/dev/%s", device.Info.Name)
-		rblnSpec, err := newDeviceSpec(devicePath, devicePath)
+		nodes, err := p.resolveNodes(ctx, device.Info.PCIBusID)
 		if err != nil {
-			return nil, fmt.Errorf("rbln device node: %w", err)
+			return nil, fmt.Errorf("native device nodes: %w", err)
 		}
-		specs = append(specs, rblnSpec)
+		for _, node := range nodes {
+			spec, err := newDeviceSpec(node.Path, node.HostPath)
+			if err != nil {
+				return nil, err
+			}
+			specs = append(specs, spec)
+		}
 	}
 
 	return specs, nil

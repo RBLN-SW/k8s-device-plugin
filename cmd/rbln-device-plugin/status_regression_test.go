@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -42,6 +43,7 @@ func newStatusFixture(t *testing.T, initialStatus string) *statusFixture {
 	sriovPCISysfsDevicesPath = t.TempDir()
 	// /dev/null lets successful allocation exercise the complete path without hardware.
 	device := rblndevice.Device{Name: "null", ProductName: "RBLN-CA25", PCIBusID: "0000:4d:00.0"}
+	writeSysfsAttr(t, sriovPCISysfsDevicesPath, device.PCIBusID, "sriov_numvfs", "0")
 	getDevices = func(context.Context) ([]rblndevice.Device, error) {
 		return []rblndevice.Device{device}, nil
 	}
@@ -62,7 +64,8 @@ func newStatusFixture(t *testing.T, initialStatus string) *statusFixture {
 	if err := os.WriteFile(rsdPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	f.plugin.rsdGroupFn = func([]string) (string, error) {
+	f.plugin.resolveNodes = testNativeNodes
+	f.plugin.rsdGroupFn = func(_ context.Context, _ []string) (string, error) {
 		f.rsdCalls++
 		return rsdPath, nil
 	}
@@ -244,11 +247,21 @@ func TestStatusAllocateRejectsWholeRequestBeforeSideEffects(t *testing.T) {
 
 func TestStatusAllocateReadsEachRequestedDeviceOnce(t *testing.T) {
 	f := newStatusFixture(t, "")
+	zero := inventoryDevice("zero", pluginapi.Healthy, "READY")
+	zero.Info.PCIBusID = "0000:4e:00.0"
+	f.plugin.resolveNodes = func(_ context.Context, address string) ([]system.DeviceNode, error) {
+		path := "/dev/null"
+		if address == zero.Info.PCIBusID {
+			path = "/dev/zero"
+		}
+		return []system.DeviceNode{{Path: path, HostPath: path, Kind: "native"}}, nil
+	}
 	f.plugin.UpdateDevices(map[string]NPUDevice{
 		"null":        inventoryDevice("null", pluginapi.Healthy, "READY"),
-		"zero":        inventoryDevice("zero", pluginapi.Healthy, "READY"),
+		"zero":        zero,
 		"unrequested": inventoryDevice("unrequested", pluginapi.Healthy, "READY"),
 	})
+
 	discover := getDevices
 	getDevices = func(ctx context.Context) ([]rblndevice.Device, error) {
 		t.Error("Allocate must not rediscover the full inventory")

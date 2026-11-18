@@ -14,7 +14,7 @@ import (
 	"github.com/RBLN-SW/k8s-device-plugin/pkg/consts"
 )
 
-var getDevices = rblndevice.GetDevices
+var getDevices = getSystemDevices
 
 type NPUDevice struct {
 	Info   rblndevice.Device

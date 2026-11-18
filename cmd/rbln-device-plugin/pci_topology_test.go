@@ -37,6 +37,11 @@ func newPCITestFixture(t testing.TB, paths map[string]string) pciTestFixture {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				t.Fatal(err)
 			}
+			for attr, value := range map[string]string{"vendor": "0x1eff", "class": "0x120000", "device": "0x2130"} {
+				if err := os.WriteFile(filepath.Join(target, attr), []byte(value), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
 			bdf = filepath.Base(target)
 			if err := os.Symlink(target, filepath.Join(bus, bdf)); err != nil {
 				t.Fatal(err)
