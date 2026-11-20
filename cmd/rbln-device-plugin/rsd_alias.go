@@ -15,9 +15,6 @@ import (
 
 // buses is sorted, normalized, unique and nonempty (allocationBusIDs).
 func rsdAliasName(buses []string) string {
-	if len(buses) == 1 {
-		return buses[0]
-	}
 	digest := rsdSetDigest(buses)
 	return rsdSetName(digest[:])
 }
@@ -41,46 +38,31 @@ func unlinkRSDFile(path string) error {
 // A cached HostPath must never resolve to a group that another phase has
 // repurposed. Retire every intersecting different alias before changing the
 // hardware. Index multi-device aliases by each member, so {A,B} is retired
-// even when the next request contains only B. Singletons have a known path.
-// The caller holds the node writer lock. Write the new index before publishing
+// even when the next request contains only B. All new names use the set
+// prefix, so a leftover alias from a previous draft cannot satisfy a start.
+// The caller holds the node writer lock. Update the index before publishing
 // the node so a retry after process loss can always find a published alias.
 func retireOverlappingAliases(staging string, buses []string) error {
 	dir := filepath.Dir(staging)
-	var next []byte
-	if len(buses) > 1 {
-		digest := rsdSetDigest(buses)
-		next = digest[:]
-	}
+	next := rsdSetDigest(buses)
 	for _, bus := range buses {
-		if next != nil {
-			if err := unlinkRSDFile(filepath.Join(dir, bus)); err != nil {
-				return err
-			}
-		}
 		index := filepath.Join(dir, ".member-"+bus)
 		old, err := os.ReadFile(index)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err == nil && len(old) != sha256.Size {
-			return fmt.Errorf("invalid RSD membership index for %s", bus)
-		}
-		if bytes.Equal(old, next) {
-			continue
-		}
-		if old != nil {
+		if err == nil {
+			if len(old) != sha256.Size {
+				return fmt.Errorf("invalid RSD membership index for %s", bus)
+			}
+			if bytes.Equal(old, next[:]) {
+				continue
+			}
 			if err := unlinkRSDFile(filepath.Join(dir, rsdSetName(old))); err != nil {
 				return err
 			}
-		}
-		if next == nil {
-			if err := unlinkRSDFile(index); err != nil {
-				return err
-			}
-			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 		marker := filepath.Join(staging, "membership")
-		if err := os.WriteFile(marker, next, 0o600); err != nil {
+		if err := os.WriteFile(marker, next[:], 0o600); err != nil {
 			return err
 		}
 		if err := os.Rename(marker, index); err != nil {

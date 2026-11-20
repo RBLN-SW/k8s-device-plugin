@@ -130,7 +130,7 @@ func newTracingTestPlugin(t *testing.T) (*ResourcePlugin, string) {
 		return "", nil
 	}
 
-	return plugin, filepath.Join(plugin.rsdAliasDir, "0000:06:00.0")
+	return plugin, filepath.Join(plugin.rsdAliasDir, rsdAliasName([]string{"0000:06:00.0"}))
 }
 
 func requireSpan(t *testing.T, spans []sdktrace.ReadOnlySpan, name string) sdktrace.ReadOnlySpan {

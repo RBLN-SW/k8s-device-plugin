@@ -118,7 +118,7 @@ func TestAllocateReturnsRuntimeAnnotationAndDeviceSpecs(t *testing.T) {
 	if len(containerResponse.Devices) != 2 {
 		t.Fatalf("expected 2 device specs, got %d", len(containerResponse.Devices))
 	}
-	alias := filepath.Join(plugin.rsdAliasDir, "0000:06:00.0")
+	alias := filepath.Join(plugin.rsdAliasDir, rsdAliasName([]string{"0000:06:00.0"}))
 	if prepared != 0 {
 		t.Fatalf("Allocate prepared %d groups", prepared)
 	}

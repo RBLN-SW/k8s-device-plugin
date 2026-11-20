@@ -370,7 +370,7 @@ func TestPreStartVFPreparesRSDGroup(t *testing.T) {
 	if len(containerResponse.Devices) != 2 {
 		t.Fatalf("expected rsd and VF device specs, got %d specs: %+v", len(containerResponse.Devices), containerResponse.Devices)
 	}
-	if got := containerResponse.Devices[0]; got.ContainerPath != "/dev/rsd0" || got.HostPath != filepath.Join(plugin.rsdAliasDir, "0000:17:00.1") || got.Permissions != "rw" {
+	if got := containerResponse.Devices[0]; got.ContainerPath != "/dev/rsd0" || got.HostPath != filepath.Join(plugin.rsdAliasDir, rsdAliasName([]string{"0000:17:00.1"})) || got.Permissions != "rw" {
 		t.Fatalf("unexpected rsd device spec: %+v", got)
 	}
 	if got := containerResponse.Devices[1]; got.ContainerPath != "/dev/null" || got.HostPath != "/dev/null" || got.Permissions != "rw" {

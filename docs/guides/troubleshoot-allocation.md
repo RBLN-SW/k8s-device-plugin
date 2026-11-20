@@ -55,4 +55,4 @@ before creating another workload.
 
 Kubelet stores the host device paths returned at admission. The plugin prepares a private RSD group before each container starts. Overlapping allocations with different PCI members have separate paths. When a phase ends, the next phase retires incompatible paths before changing the group. A start that needs an unpublished path can retry after registration.
 
-For a rollback to a version that prepares groups during Allocate, move or terminate the node's NPU workloads first. Recreate the Pods after the older plugin has registered so kubelet obtains fresh device specifications. Pods created with a pre-release multi-device alias based only on the lowest PCI address also need recreation when upgrading to set-specific paths.
+For a rollback to a version that prepares groups during Allocate, move or terminate the node's NPU workloads first. Recreate the Pods after the older plugin has registered so kubelet obtains fresh device specifications. Pods created with a pre-release alias based only on the lowest PCI address also need recreation when upgrading to set-specific paths.
