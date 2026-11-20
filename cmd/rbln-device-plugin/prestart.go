@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -81,7 +82,11 @@ func publishRSDNode(target, alias string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(staging)
+	defer func() {
+		if err := os.RemoveAll(staging); err != nil {
+			slog.Warn("Failed to remove RSD staging directory", "path", staging, "err", err)
+		}
+	}()
 	temp := filepath.Join(staging, "rsd")
 	if err := os.Link(target, temp); err != nil {
 		return err
