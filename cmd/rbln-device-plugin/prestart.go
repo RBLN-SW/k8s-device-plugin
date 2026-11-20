@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
@@ -48,12 +48,9 @@ func (p *ResourcePlugin) PreStartContainer(ctx context.Context, req *pluginapi.P
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	// Concurrent containers receive disjoint exclusive devices, so their
-	// lowest PCI addresses differ. Sequential phases can reuse a path. Both
-	// callbacks derive it from inventory, including after plugin restart.
-	alias := filepath.Join(p.rsdAliasDir, buses[0])
-	// Both plugins mount the host /dev. Hold the same writer lock as DRA
-	// until the kubelet-visible path has been published.
+	alias := filepath.Join(p.rsdAliasDir, rsdAliasName(buses))
+	// Keep alias invalidation, driver regrouping and publication in one
+	// transaction across all resource endpoints on the node.
 	dir := filepath.Dir(alias)
 	staging, err := stagePublication(dir)
 	if err != nil {
@@ -74,17 +71,21 @@ func (p *ResourcePlugin) PreStartContainer(ctx context.Context, req *pluginapi.P
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
-	var target string
-	if legacy != "" {
-		// Kubelet will still inject its original path on restart. Preserve it
-		// only if this private group already matches the entire allocation.
-		target = legacy
-		err = verifySystemRSD(ctx, legacy, buses)
-	} else {
-		target, err = p.rsdGroupFn(ctx, buses)
+	// For a cached direct path, verify ownership before retiring any aliases.
+	target := legacy
+	if target != "" {
+		if err := verifySystemRSD(ctx, target, buses); err != nil {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
 	}
-	if err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "prepare RSD group for %v: %v", buses, err)
+	if err := retireOverlappingAliases(staging, buses); err != nil {
+		return nil, status.Errorf(codes.Internal, "retire overlapping RSD aliases: %v", err)
+	}
+	if target == "" {
+		target, err = p.rsdGroupFn(ctx, buses)
+		if err != nil {
+			return nil, status.Errorf(codes.FailedPrecondition, "prepare RSD group for %v: %v", buses, err)
+		}
 	}
 	if err := publishRSDNode(staging, target, alias); err != nil {
 		return nil, status.Errorf(codes.Internal, "publish RSD device %s: %v", alias, err)
@@ -96,7 +97,7 @@ func (p *ResourcePlugin) PreStartContainer(ctx context.Context, req *pluginapi.P
 // The private directory is on the host devtmpfs. A hard link presents the
 // driver's actual character node to either CRI without relying on symlink
 // handling. Atomic replacement also keeps a failed publication from replacing
-// a previously valid alias. Only one name per PCI function is needed.
+// a previously valid alias for the same set.
 func stagePublication(dir string) (string, error) {
 	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return "", err

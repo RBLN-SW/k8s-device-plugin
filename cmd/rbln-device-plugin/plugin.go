@@ -332,7 +332,7 @@ func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []stri
 	if err != nil {
 		return nil, recordErr(err)
 	}
-	hostRsdPath := filepath.Join(p.rsdAliasDir, busIDs[0])
+	hostRsdPath := filepath.Join(p.rsdAliasDir, rsdAliasName(busIDs))
 	span.SetAttributes(attribute.StringSlice(attrBusIDs, busIDs), attribute.String(attrRsdHostPath, hostRsdPath))
 	start := time.Now()
 	deviceSpecs, err := p.deviceSpecsForDevices(ctx, selected, hostRsdPath)

@@ -65,11 +65,33 @@ func TestOverlappingRequestsPublishOnlyAtContainerStart(t *testing.T) {
 	if _, err := os.Stat(initAlias); !os.IsNotExist(err) {
 		t.Fatalf("admission published %s: %v", initAlias, err)
 	}
-	phase(p, initAlias, "a", "b")
-	// Restart with fresh process state before starting the application. Here
-	// both sets use the same anchor; the alias must atomically change target.
+	if initAlias == appAlias {
+		t.Fatal("different PCI sets have the same kubelet HostPath")
+	}
+	missing := func(path string) {
+		t.Helper()
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("alias %s should be unavailable: %v", path, err)
+		}
+	}
+	otherAlias := allocate("b")
+	phase(p, appAlias, "a")
+	phase(p, otherAlias, "b")
+	// Both disjoint singletons are published. Growing to {A,B} must
+	// invalidate even the singleton which is not the lowest PCI address.
+	phase(newPlugin(), initAlias, "b", "a")
+	missing(appAlias)
+	missing(otherAlias)
+	// A fresh process can shrink to either member and retire the old pair.
+	phase(newPlugin(), otherAlias, "b")
+	missing(initAlias)
+	missing(appAlias)
+	phase(newPlugin(), otherAlias, "b")
+	phase(newPlugin(), initAlias, "a", "b")
+	missing(otherAlias)
 	phase(newPlugin(), appAlias, "a")
-	phase(newPlugin(), appAlias, "a")
+	missing(initAlias)
+
 }
 
 func TestPublishFailurePreservesExistingAlias(t *testing.T) {

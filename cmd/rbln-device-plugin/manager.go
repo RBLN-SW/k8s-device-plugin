@@ -42,16 +42,6 @@ func NewManager(config *Config) (*Manager, error) {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	if err := m.reconcile(ctx); err != nil {
-		return err
-	}
-	if m.health != nil {
-		m.health.SetServing(true)
-	}
-
-	deviceTicker := time.NewTicker(m.config.flags.deviceScanInterval)
-	defer deviceTicker.Stop()
-
 	kubeletWatcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("create kubelet socket watcher: %w", err)
@@ -65,6 +55,18 @@ func (m *Manager) Run(ctx context.Context) error {
 	if err := kubeletWatcher.Add(m.config.flags.kubeletDevicePluginPath); err != nil {
 		return fmt.Errorf("watch kubelet device-plugin directory %s: %w", m.config.flags.kubeletDevicePluginPath, err)
 	}
+
+	// Install the watch before registering: a kubelet socket replacement
+	// during initial discovery must be queued for the event loop.
+	if err := m.reconcile(ctx); err != nil {
+		return err
+	}
+	if m.health != nil {
+		m.health.SetServing(true)
+	}
+
+	deviceTicker := time.NewTicker(m.config.flags.deviceScanInterval)
+	defer deviceTicker.Stop()
 
 	for {
 		select {
