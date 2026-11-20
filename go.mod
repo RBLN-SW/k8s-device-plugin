@@ -2,12 +2,12 @@ module github.com/RBLN-SW/k8s-device-plugin
 
 go 1.26.0
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-logr/logr v1.4.3
-	github.com/rbln-sw/rblnlib-go v0.4.0
+	github.com/rbln-sw/rblnlib-go v0.4.1
 	github.com/urfave/cli/v2 v2.25.3
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0
