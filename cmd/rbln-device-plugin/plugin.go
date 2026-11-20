@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 
@@ -40,6 +39,7 @@ type ResourcePlugin struct {
 	log           *slog.Logger
 	cdi           *CDIHandler
 	rsdGroupFn    func(context.Context, []string) (string, error)
+	rsdAliasDir   string
 	resolveNodes  func(context.Context, string) ([]system.DeviceNode, error)
 	devices       map[string]NPUDevice
 	// healthHistory is shared by scan and Allocate under mu. It survives a
@@ -63,6 +63,7 @@ func NewResourcePlugin(resourceName, socketPath, kubeletSocket string, cdi *CDIH
 		log:           slog.With("resourceName", resourceName),
 		cdi:           cdi,
 		rsdGroupFn:    recreateSystemRSDGroup,
+		rsdAliasDir:   "/dev/.rbln-k8s-prestart-rsd",
 		resolveNodes:  nativeSystemNodes,
 		devices:       cloneDeviceMap(devices),
 		updateCh:      make(chan []*pluginapi.Device, 1),
@@ -190,7 +191,7 @@ func (p *ResourcePlugin) logInventoryDelta(delta deviceInventoryDelta, healthy, 
 }
 
 func (p *ResourcePlugin) GetDevicePluginOptions(context.Context, *pluginapi.Empty) (*pluginapi.DevicePluginOptions, error) {
-	return preferredAllocationOptions(), nil
+	return devicePluginOptions(), nil
 }
 
 func (p *ResourcePlugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
@@ -221,8 +222,7 @@ func (p *ResourcePlugin) Allocate(ctx context.Context, request *pluginapi.Alloca
 	))
 	defer span.End()
 
-	// Read status once per requested device before creating any RSD groups or
-	// CDI responses. Reuse the validated snapshot for all containers without
+	// Read status once per requested device before building container responses. Reuse the validated snapshot for all containers without
 	// rediscovering inventory or reading status again during allocation.
 	start := time.Now()
 	var requestedIDs []string
@@ -326,37 +326,15 @@ func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []stri
 		return nil, recordErr(fmt.Errorf("CDI handler is not configured"))
 	}
 
-	busIDs := make([]string, 0, len(selected))
-	for _, device := range selected {
-		if device.Info.PCIBusID == "" {
-			return nil, recordErr(fmt.Errorf("device %q is missing PCIBusID", device.Info.Name))
-		}
-		busIDs = append(busIDs, device.Info.PCIBusID)
-	}
-
-	sort.Strings(busIDs)
-	span.SetAttributes(attribute.StringSlice(attrBusIDs, busIDs))
-	// Every durationMs below is measured from here, so one allocation's records
-	// read as a timeline: RSD group setup versus waiting for device nodes.
-	start := time.Now()
-	p.log.Info("Starting container allocation",
-		"deviceIDs", deviceIDs,
-		"busIDs", busIDs,
-	)
-	// VFs get their own RSD group exactly like PFs (confirmed with SSW): the
-	// runtime requires a dedicated group node — never the
-	// shared default rsd0 — for VF workloads too.
-	hostRsdPath, err := p.rsdGroupFn(ctx, busIDs)
+	// Kubelet can request all init and application containers at admission.
+	// Their physical RSD groups may overlap and are prepared only at start.
+	busIDs, err := allocationBusIDs(selected)
 	if err != nil {
-		return nil, recordErr(fmt.Errorf("prepare RSD group for bus IDs %v: %w", busIDs, err))
+		return nil, recordErr(err)
 	}
-	span.SetAttributes(attribute.String(attrRsdHostPath, hostRsdPath))
-	p.log.Debug("Prepared RSD group",
-		"busIDs", busIDs,
-		"hostRsdPath", hostRsdPath,
-		"durationMs", time.Since(start).Milliseconds(),
-	)
-
+	hostRsdPath := filepath.Join(p.rsdAliasDir, busIDs[0])
+	span.SetAttributes(attribute.StringSlice(attrBusIDs, busIDs), attribute.String(attrRsdHostPath, hostRsdPath))
+	start := time.Now()
 	deviceSpecs, err := p.deviceSpecsForDevices(ctx, selected, hostRsdPath)
 	if err != nil {
 		return nil, recordErr(err)
@@ -481,7 +459,7 @@ func (p *ResourcePlugin) register(ctx context.Context) error {
 		Version:      pluginapi.Version,
 		Endpoint:     filepath.Base(p.socketPath),
 		ResourceName: p.resourceName,
-		Options:      preferredAllocationOptions(),
+		Options:      devicePluginOptions(),
 	}
 
 	if _, err := client.Register(ctxDial, request); err != nil {
@@ -505,9 +483,10 @@ func (p *ResourcePlugin) register(ctx context.Context) error {
 	return nil
 }
 
-func preferredAllocationOptions() *pluginapi.DevicePluginOptions {
+func devicePluginOptions() *pluginapi.DevicePluginOptions {
 	return &pluginapi.DevicePluginOptions{
 		GetPreferredAllocationAvailable: true,
+		PreStartRequired:                true,
 	}
 }
 
@@ -527,13 +506,8 @@ func cloneDeviceMap(devices map[string]NPUDevice) map[string]NPUDevice {
 func (p *ResourcePlugin) deviceSpecsForDevices(ctx context.Context, devices []NPUDevice, hostRsdPath string) ([]*pluginapi.DeviceSpec, error) {
 	specs := make([]*pluginapi.DeviceSpec, 0, len(devices)+1)
 
-	if hostRsdPath != "" {
-		rsdSpec, err := newDeviceSpec("/dev/rsd0", hostRsdPath)
-		if err != nil {
-			return nil, fmt.Errorf("rsd device node: %w", err)
-		}
-		specs = append(specs, rsdSpec)
-	}
+	// PreStartContainer publishes this character node before CRI CreateContainer.
+	specs = append(specs, &pluginapi.DeviceSpec{ContainerPath: "/dev/rsd0", HostPath: hostRsdPath, Permissions: "rw"})
 
 	for _, device := range devices {
 		nodes, err := p.resolveNodes(ctx, device.Info.PCIBusID)

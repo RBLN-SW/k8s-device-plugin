@@ -305,7 +305,7 @@ func TestGetPreferredAllocationReportsFallbackAtWarn(t *testing.T) {
 // The device is named "null" so the /dev/<name> device-node poll resolves to
 // the always-present /dev/null (same trick as the allocate test in
 // cdi_test.go).
-func TestAllocateVFCreatesRSDGroup(t *testing.T) {
+func TestPreStartVFPreparesRSDGroup(t *testing.T) {
 	t.Parallel()
 
 	cdi, err := NewCDIHandler(t.TempDir())
@@ -333,6 +333,7 @@ func TestAllocateVFCreatesRSDGroup(t *testing.T) {
 			},
 		},
 	)
+	plugin.rsdAliasDir = filepath.Join(t.TempDir(), "rsd")
 	var rsdBusIDs []string
 	plugin.resolveNodes = testNativeNodes
 	plugin.rsdGroupFn = func(_ context.Context, busIDs []string) (string, error) {
@@ -349,6 +350,12 @@ func TestAllocateVFCreatesRSDGroup(t *testing.T) {
 		t.Fatalf("allocate: %v", err)
 	}
 
+	if len(rsdBusIDs) != 0 {
+		t.Fatal("Allocate changed the VF group")
+	}
+	if _, err := plugin.PreStartContainer(t.Context(), &pluginapi.PreStartContainerRequest{DevicesIds: []string{"null"}}); err != nil {
+		t.Fatal(err)
+	}
 	if len(rsdBusIDs) != 1 || rsdBusIDs[0] != "0000:17:00.1" {
 		t.Fatalf("expected rsdGroupFn to be called with the VF bus ID, got %v", rsdBusIDs)
 	}
@@ -362,7 +369,7 @@ func TestAllocateVFCreatesRSDGroup(t *testing.T) {
 	if len(containerResponse.Devices) != 2 {
 		t.Fatalf("expected rsd and VF device specs, got %d specs: %+v", len(containerResponse.Devices), containerResponse.Devices)
 	}
-	if got := containerResponse.Devices[0]; got.ContainerPath != "/dev/rsd0" || got.HostPath != rsdPath || got.Permissions != "rw" {
+	if got := containerResponse.Devices[0]; got.ContainerPath != "/dev/rsd0" || got.HostPath != filepath.Join(plugin.rsdAliasDir, "0000:17:00.1") || got.Permissions != "rw" {
 		t.Fatalf("unexpected rsd device spec: %+v", got)
 	}
 	if got := containerResponse.Devices[1]; got.ContainerPath != "/dev/null" || got.HostPath != "/dev/null" || got.Permissions != "rw" {
