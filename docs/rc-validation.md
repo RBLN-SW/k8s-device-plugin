@@ -16,10 +16,10 @@ or implement a separate test-report verdict.
   the helper verifies the execution repository and OB link.
 - `CLOUD_COMPONENT_HARBOR_REGISTRY` is the same host/project used by the release
   kit to publish images. Registry credentials remain managed by piper/OB.
-- Merge the bootstrap into the branch/commit OB will check out, sync that
-  repository in piper, and switch the OB entry point to that bootstrap.
-  It must forward `?run=$PIPER_RUN`. The helper fails before triggering if the
-  recorded bootstrap or OB entry point is not ready.
+- Merge the bootstrap into the branch/commit OB will check out and sync the
+  repository in piper. OB can upload that file or run the same generated
+  bootstrap inline, including the optional sparse checkout of `.buildkite`.
+  Both forms must forward `?run=$PIPER_RUN` to the registered bundle.
 - Release branches need this workflow, helper and bootstrap before creating a
   new RC. An old RC tag still contains its old workflow.
 - `RC_VALIDATION_SENTINEL_REF` optionally overrides the harness ref on every
@@ -56,6 +56,6 @@ before retrying; a repeated POST creates another build. A wait timeout does
 not cancel the OB build. Use piper to inspect, cancel or retry an existing run;
 do not rerun image publication just to retry validation.
 
-For a read-only payload check with the same release environment:
-`python3 .github/scripts/piper_rc.py --dry-run`. This reads piper configuration
+With Python 3 and PyYAML installed, run `python3 .github/scripts/piper_rc.py --dry-run`
+in the release environment for a read-only payload check. This reads piper configuration
 and calls preview only. The offline unittest suite intercepts all requests.
