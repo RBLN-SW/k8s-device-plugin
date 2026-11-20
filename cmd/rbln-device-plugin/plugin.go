@@ -344,14 +344,14 @@ func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []stri
 		"busIDs", busIDs,
 	)
 	// VFs get their own RSD group exactly like PFs (confirmed with SSW): the
-	// runtime requires a dedicated, freshly created group node — never the
+	// runtime requires a dedicated group node — never the
 	// shared default rsd0 — for VF workloads too.
 	hostRsdPath, err := p.rsdGroupFn(ctx, busIDs)
 	if err != nil {
-		return nil, recordErr(fmt.Errorf("recreate RSD group for bus IDs %v: %w", busIDs, err))
+		return nil, recordErr(fmt.Errorf("prepare RSD group for bus IDs %v: %w", busIDs, err))
 	}
 	span.SetAttributes(attribute.String(attrRsdHostPath, hostRsdPath))
-	p.log.Debug("Recreated RSD group",
+	p.log.Debug("Prepared RSD group",
 		"busIDs", busIDs,
 		"hostRsdPath", hostRsdPath,
 		"durationMs", time.Since(start).Milliseconds(),
