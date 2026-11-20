@@ -16,6 +16,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import yaml
+
 CONFIG = Path(__file__).with_name("piper-rc.json")
 PIPELINE_FIELDS = (
     "key", "name", "description", "cluster_id", "pool_id", "cluster_grace_minutes",
@@ -174,13 +176,55 @@ def prepare(client, config, env):
     return root, bundle, payload
 
 
-def ensure_bootstrap(client, root):
+def is_bootstrap_checkout(plugin):
+    if not isinstance(plugin, dict) or len(plugin) != 1:
+        return False
+    name, settings = next(iter(plugin.items()))
+    return (isinstance(name, str) and name.partition("#")[0] == "sparse-checkout"
+            and settings == {"paths": [".buildkite"]})
+
+
+def matches_inline_bootstrap(content, configuration):
+    """Compare OB's single upload step with the bootstrap generated for this bundle."""
+    if not isinstance(content, str) or not isinstance(configuration, str):
+        return False
+    try:
+        expected = yaml.safe_load(content)
+        actual = yaml.safe_load(configuration)
+    except yaml.YAMLError:
+        return False
+
+    for document in (expected, actual):
+        if not isinstance(document, dict):
+            return False
+        steps = document.get("steps")
+        if not isinstance(steps, list) or len(steps) != 1:
+            return False
+        step = steps[0]
+        if not isinstance(step, dict) or not isinstance(step.get("command"), str):
+            return False
+        step["command"] = step["command"].rstrip("\n")
+        if not step["command"].strip():
+            return False
+        step.pop("label", None)
+        # OB may limit checkout to the bootstrap directory before running the same command.
+        plugins = step.get("plugins")
+        if isinstance(plugins, list) and all(is_bootstrap_checkout(plugin) for plugin in plugins):
+            del step["plugins"]
+    return actual == expected
+
+
+def ensure_bootstrap(client, root, ob_pipeline):
     bootstrap = client.request("GET", root + "/bootstrap")
     if not bootstrap.get("matches"):
         raise ValueError("Merge the piper bootstrap into the execution branch and sync the piper repository")
     ob = client.request("GET", root + "/ob/bootstrap")
-    if not ob.get("matches"):
-        raise ValueError("The OB entry point still uses the old pipeline; switch it to the piper bootstrap")
+    if ob.get("matches"):
+        return
+    pipeline = client.request("GET", "/api/ob/pipelines/" + urllib.parse.quote(ob_pipeline, safe=""))
+    if not matches_inline_bootstrap(bootstrap.get("content"), pipeline.get("configuration")):
+        raise ValueError("The OB entry point must upload the registered piper bootstrap file "
+                         "or run its bundle upload command inline with PIPER_RUN")
 
 
 def cancel_superseded(client, root, config, payload):
@@ -253,7 +297,7 @@ def run(client, config, env, dry_run=False):
     if dry_run:
         print(json.dumps(payload, indent=2))
         return 0
-    ensure_bootstrap(client, root)
+    ensure_bootstrap(client, root, bundle["ob_pipeline"])
     cancel_superseded(client, root, config, payload)
     # One POST only. A timeout may have created the build; never replay it.
     try:
