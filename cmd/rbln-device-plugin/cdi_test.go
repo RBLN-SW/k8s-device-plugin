@@ -122,6 +122,7 @@ func TestAllocateReturnsRuntimeAnnotationAndDeviceSpecs(t *testing.T) {
 	if prepared != 0 {
 		t.Fatalf("Allocate prepared %d groups", prepared)
 	}
+	writeAllocation(t, plugin, []string{"rbln0"}, response.ContainerResponses[0])
 	if _, err := plugin.PreStartContainer(t.Context(), &pluginapi.PreStartContainerRequest{DevicesIds: []string{"rbln0"}}); err != nil {
 		t.Fatal(err)
 	}

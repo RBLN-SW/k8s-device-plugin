@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"syscall"
+	"time"
 
 	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 	"google.golang.org/grpc/codes"
@@ -50,11 +52,41 @@ func (p *ResourcePlugin) PreStartContainer(ctx context.Context, req *pluginapi.P
 	// lowest PCI addresses differ. Sequential phases can reuse a path. Both
 	// callbacks derive it from inventory, including after plugin restart.
 	alias := filepath.Join(p.rsdAliasDir, buses[0])
-	target, err := p.rsdGroupFn(ctx, buses)
+	// Both plugins mount the host /dev. Hold the same writer lock as DRA
+	// until the kubelet-visible path has been published.
+	dir := filepath.Dir(alias)
+	staging, err := stagePublication(dir)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "stage RSD device: %v", err)
+	}
+	defer removeStaging(staging)
+	lock, err := lockRSD(ctx, filepath.Join(filepath.Dir(dir), ".rbln-rsd-writer.lock"))
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "lock RSD writer: %v", err)
+	}
+	defer func() {
+		if err := lock.Close(); err != nil {
+			p.log.Warn("Close RSD writer lock", "err", err)
+		}
+	}()
+
+	legacy, err := p.cachedRSD(req.GetDevicesIds(), devices, alias)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	var target string
+	if legacy != "" {
+		// Kubelet will still inject its original path on restart. Preserve it
+		// only if this private group already matches the entire allocation.
+		target = legacy
+		err = verifySystemRSD(ctx, legacy, buses)
+	} else {
+		target, err = p.rsdGroupFn(ctx, buses)
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "prepare RSD group for %v: %v", buses, err)
 	}
-	if err := publishRSDNode(target, alias); err != nil {
+	if err := publishRSDNode(staging, target, alias); err != nil {
 		return nil, status.Errorf(codes.Internal, "publish RSD device %s: %v", alias, err)
 	}
 	p.log.Info("Prepared RSD device before container start", "busIDs", buses, "deviceIDs", req.GetDevicesIds(), "hostRsdPath", target, "alias", alias)
@@ -65,31 +97,53 @@ func (p *ResourcePlugin) PreStartContainer(ctx context.Context, req *pluginapi.P
 // driver's actual character node to either CRI without relying on symlink
 // handling. Atomic replacement also keeps a failed publication from replacing
 // a previously valid alias. Only one name per PCI function is needed.
-func publishRSDNode(target, alias string) error {
-	dir := filepath.Dir(alias)
+func stagePublication(dir string) (string, error) {
 	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
+		return "", err
 	}
 	info, err := os.Lstat(dir)
 	if err != nil {
-		return err
+		return "", err
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !info.IsDir() || info.Mode().Perm() != 0o700 || !ok || int(st.Uid) != os.Geteuid() {
-		return fmt.Errorf("invalid private RSD directory %s", dir)
+		return "", fmt.Errorf("invalid private RSD directory %s", dir)
 	}
-	staging, err := os.MkdirTemp(dir, ".publish-")
-	if err != nil {
-		return err
+	return os.MkdirTemp(dir, ".publish-")
+}
+
+func removeStaging(staging string) {
+	if err := os.RemoveAll(staging); err != nil {
+		slog.Warn("Failed to remove RSD staging directory", "path", staging, "err", err)
 	}
-	defer func() {
-		if err := os.RemoveAll(staging); err != nil {
-			slog.Warn("Failed to remove RSD staging directory", "path", staging, "err", err)
-		}
-	}()
+}
+
+func publishRSDNode(staging, target, alias string) error {
 	temp := filepath.Join(staging, "rsd")
 	if err := os.Link(target, temp); err != nil {
 		return err
 	}
 	return os.Rename(temp, alias)
+}
+
+func lockRSD(ctx context.Context, path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW, 0600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) {
+			break
+		}
+		select {
+		case <-time.After(25 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, errors.Join(ctx.Err(), f.Close())
+		}
+	}
+	return nil, errors.Join(err, f.Close())
 }

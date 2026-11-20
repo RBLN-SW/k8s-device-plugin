@@ -345,6 +345,7 @@ func (p *ResourcePlugin) allocateContainer(ctx context.Context, deviceIDs []stri
 		return nil, recordErr(fmt.Errorf("create CDI runtime annotations: %w", err))
 	}
 
+	annotations[p.identityKey()] = pciIdentity(deviceIDs, selected)
 	response := &pluginapi.ContainerAllocateResponse{
 		Annotations: annotations,
 		Devices:     deviceSpecs,

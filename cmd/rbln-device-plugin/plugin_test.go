@@ -353,6 +353,7 @@ func TestPreStartVFPreparesRSDGroup(t *testing.T) {
 	if len(rsdBusIDs) != 0 {
 		t.Fatal("Allocate changed the VF group")
 	}
+	writeAllocation(t, plugin, []string{"null"}, response.ContainerResponses[0])
 	if _, err := plugin.PreStartContainer(t.Context(), &pluginapi.PreStartContainerRequest{DevicesIds: []string{"null"}}); err != nil {
 		t.Fatal(err)
 	}

@@ -79,10 +79,14 @@ func TestPublishFailurePreservesExistingAlias(t *testing.T) {
 	if err := os.WriteFile(first, []byte("first"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishRSDNode(first, alias); err != nil {
+	stage, err := stagePublication(filepath.Dir(alias))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publishRSDNode(filepath.Join(root, "missing"), alias); err == nil {
+	if err := publishRSDNode(stage, first, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishRSDNode(stage, filepath.Join(root, "missing"), alias); err == nil {
 		t.Fatal("unavailable device published")
 	}
 	if b, err := os.ReadFile(alias); err != nil || string(b) != "first" {
