@@ -64,6 +64,7 @@ func newStatusFixture(t *testing.T, initialStatus string) *statusFixture {
 	if err := os.WriteFile(rsdPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	f.plugin.rsdAliasDir = filepath.Join(t.TempDir(), "rsd")
 	f.plugin.resolveNodes = testNativeNodes
 	f.plugin.rsdGroupFn = func(_ context.Context, _ []string) (string, error) {
 		f.rsdCalls++
@@ -146,8 +147,8 @@ func (f *statusFixture) allocate(t *testing.T, wantBlocked bool) {
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
-	if f.rsdCalls != before+1 || len(response.ContainerResponses) != 1 || len(response.ContainerResponses[0].Annotations) == 0 {
-		t.Fatalf("successful Allocate did not create RSD/CDI response: %v", response)
+	if f.rsdCalls != before || len(response.ContainerResponses) != 1 || len(response.ContainerResponses[0].Annotations) == 0 {
+		t.Fatalf("unexpected Allocate side effect or missing CDI response: %v", response)
 	}
 }
 
@@ -278,7 +279,7 @@ func TestStatusAllocateReadsEachRequestedDeviceOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.rsdCalls != 3 || len(response.ContainerResponses) != 3 {
+	if f.rsdCalls != 0 || len(response.ContainerResponses) != 3 {
 		t.Fatalf("expected three allocations: RSD calls=%d, response=%v", f.rsdCalls, response)
 	}
 	for i, wantPath := range []string{"/dev/zero", "/dev/null", "/dev/null"} {

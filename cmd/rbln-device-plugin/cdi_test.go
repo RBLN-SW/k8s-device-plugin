@@ -90,8 +90,10 @@ func TestAllocateReturnsRuntimeAnnotationAndDeviceSpecs(t *testing.T) {
 			"rbln0": testDevice("null", "sid-a", "0000:06:00.0", "0"),
 		},
 	)
+	plugin.rsdAliasDir = filepath.Join(t.TempDir(), "rsd")
 	plugin.resolveNodes = testNativeNodes
-	plugin.rsdGroupFn = func(_ context.Context, _ []string) (string, error) { return rsdPath, nil }
+	prepared := 0
+	plugin.rsdGroupFn = func(_ context.Context, _ []string) (string, error) { prepared++; return rsdPath, nil }
 
 	response, err := plugin.Allocate(context.Background(), &pluginapi.AllocateRequest{
 		ContainerRequests: []*pluginapi.ContainerAllocateRequest{
@@ -116,7 +118,26 @@ func TestAllocateReturnsRuntimeAnnotationAndDeviceSpecs(t *testing.T) {
 	if len(containerResponse.Devices) != 2 {
 		t.Fatalf("expected 2 device specs, got %d", len(containerResponse.Devices))
 	}
-	if got := containerResponse.Devices[0]; got.ContainerPath != "/dev/rsd0" || got.HostPath != rsdPath || got.Permissions != "rw" {
+	alias := filepath.Join(plugin.rsdAliasDir, rsdAliasName([]string{"0000:06:00.0"}))
+	if prepared != 0 {
+		t.Fatalf("Allocate prepared %d groups", prepared)
+	}
+	writeAllocation(t, plugin, []string{"rbln0"}, response.ContainerResponses[0])
+	if _, err := plugin.PreStartContainer(t.Context(), &pluginapi.PreStartContainerRequest{DevicesIds: []string{"rbln0"}}); err != nil {
+		t.Fatal(err)
+	}
+	node, err := os.Stat(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := os.Stat(rsdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared != 1 || !os.SameFile(node, target) {
+		t.Fatalf("PreStart did not publish the prepared group device")
+	}
+	if got := containerResponse.Devices[0]; got.ContainerPath != "/dev/rsd0" || got.HostPath != alias || got.Permissions != "rw" {
 		t.Fatalf("unexpected rsd device spec: %+v", got)
 	}
 	if got := containerResponse.Devices[1]; got.ContainerPath != "/dev/null" || got.HostPath != "/dev/null" || got.Permissions != "rw" {

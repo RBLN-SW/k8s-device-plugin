@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -116,11 +115,6 @@ func newTracingTestPlugin(t *testing.T) (*ResourcePlugin, string) {
 		t.Fatalf("initialize CDI handler: %v", err)
 	}
 
-	rsdPath := filepath.Join(t.TempDir(), "rsd0")
-	if err := os.WriteFile(rsdPath, []byte(""), 0o644); err != nil {
-		t.Fatalf("write rsd device placeholder: %v", err)
-	}
-
 	plugin := NewResourcePlugin(
 		consts.GenericResourceName,
 		filepath.Join(t.TempDir(), "rbln.sock"),
@@ -131,9 +125,12 @@ func newTracingTestPlugin(t *testing.T) (*ResourcePlugin, string) {
 		},
 	)
 	plugin.resolveNodes = testNativeNodes
-	plugin.rsdGroupFn = func(_ context.Context, _ []string) (string, error) { return rsdPath, nil }
+	plugin.rsdGroupFn = func(_ context.Context, _ []string) (string, error) {
+		t.Fatal("Allocate must not prepare an RSD group")
+		return "", nil
+	}
 
-	return plugin, rsdPath
+	return plugin, filepath.Join(plugin.rsdAliasDir, rsdAliasName([]string{"0000:06:00.0"}))
 }
 
 func requireSpan(t *testing.T, spans []sdktrace.ReadOnlySpan, name string) sdktrace.ReadOnlySpan {
