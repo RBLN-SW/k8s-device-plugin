@@ -10,6 +10,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   issues: write # GA deletes the "backport release-X.Y.Z" label
@@ -19,16 +23,12 @@ jobs:
   release:
     uses: RBLN-SW/cloud-component-release-kit/.github/workflows/release.yaml@v1
     with:
+      artifact_contract: true
       # Image names under the registry (HARBOR_REGISTRY / DOCKERHUB_REGISTRY),
       # space separated.
       images: k8s-device-plugin
       # Prefix of the GitHub release title.
       release_name: RBLN Device Plugin for NPUs
-      # Helm chart directory, or remove both chart lines if there is no chart.
-      chart_dir: deployments/helm/k8s-device-plugin-chart
-      # yq expression that points the rc chart's image at Harbor, e.g.
-      # '.image.registry = env(HARBOR_HOST)'.
-      chart_rc_values: '.image.repository = strenv(HARBOR_REGISTRY) + "/k8s-device-plugin"'
     secrets:
       HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
       HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
@@ -74,6 +74,7 @@ jobs:
           PIPER_TOKEN: ${{ secrets.PIPER_TOKEN }}
           PIPER_RC_BUNDLE_ID: ${{ vars.PIPER_RC_BUNDLE_ID }}
           RC_TAG: ${{ github.ref_name }}
+          RC_IMAGE_DIGEST: ${{ fromJSON(needs.release.outputs.rc_digests).devicePlugin }}
           RC_SHA: ${{ needs.release.outputs.sha }}
           RC_BRANCH: ${{ needs.release.outputs.branch }}
           HARBOR_REGISTRY: ${{ vars.CLOUD_COMPONENT_HARBOR_REGISTRY }}
