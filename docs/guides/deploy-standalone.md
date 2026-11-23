@@ -1,5 +1,8 @@
 # Deploy the component chart
 
+New releases publish the component image only. The chart remains available in the
+source tree at each Git tag. For an OCI chart, install the NPU Operator.
+
 Use this guide when you manage this component separately from the NPU Operator.
 
 ## Before you start
